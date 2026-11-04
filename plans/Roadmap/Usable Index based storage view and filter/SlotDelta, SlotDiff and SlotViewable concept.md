@@ -1,11 +1,9 @@
 # [Task] SlotDelta, SlotDiff and SlotViewable concept
 Replace `deltas/indexable.hpp` with `deltas/slot.hpp` (holding `SlotDelta` and `SlotDiff`), and add the `SlotViewable` concept.
 
-`SlotDelta<TIndexT>` holds `activeCount`, `slotCount` and one sorted `std::span<const IndexT>` per change kind: `created`, `deleted`, `replaced` and `modified`. `moved` is a span of `{from, to}` pairs, sorted by `from`. `slotCount` is one past the largest index that may be taken; it replaces `maxIndex`, which has no valid value for an empty view.
+`SlotDelta<TIndexT>` holds `activeCount`, `slotCount` and one sorted `std::span<const IndexT>` per change kind: `created`, `deleted`, `replaced` and `modified`. `moved` is a span of `{from, to}` pairs, sorted by `from`. `slotCount` replaces `maxIndex`.
 
-A `SlotDelta` is temporary: it only views storage owned by someone else and is valid during the listener call.
-
-`SlotDiff<TIndexT>` is self-sufficient: it owns the changes accumulated between flushes and coalesces them per index:
+`SlotDiff<TIndexT>` coalesces changes per index:
 
 | Earlier | Later | Result |
 |---|---|---|
@@ -24,8 +22,8 @@ Any other pair (create after create, modify after delete, and so on) is impossib
 - "Nothing" needs its own kind, distinct from "untouched": the index is still in the touched list, so a later change must not push it a second time. `delta()` skips such entries.
 - `create(i)`, `erase(i)`, `modify(i)`: record one change.
 - `operator+=(const SlotDelta &)`: merges a whole delta in O(its size).
-- `delta(activeCount, slotCount) -> SlotDelta`: sorts the touched indices into per-kind vectors and returns spans over them, valid until the diff changes.
-- `clear()`, `empty()`. Vectors keep their capacity, so there is no allocation in steady state. `clear()` resets only the touched bytes, not the whole byte array.
+- `delta(activeCount, slotCount) -> SlotDelta`: sorts the touched indices into per-kind vectors and returns spans over them.
+- `clear()`, `empty()`. `clear()` resets only the touched bytes, not the whole byte array.
 
 Moves are not recorded yet: no source moves items, so `moved` stays empty until one does. Once they exist, a move renames indices recorded before it; that is handled inside `SlotDiff` alone.
 
@@ -33,3 +31,6 @@ Moves are not recorded yet: no source moves items, so `moved` stays empty until 
 
 Blocks:
 - [Task] SlotList
+
+Useful:
+- [Note] Deltas and Diffs

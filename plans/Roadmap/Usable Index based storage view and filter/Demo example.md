@@ -10,3 +10,7 @@ Rewrite `examples/example1.cpp` as the basic demo, with asserts as a self-check 
 
 Fixes:
 - [Bug] example1 includes nonexistent headers
+
+Useful:
+- [Note] Pull data flow
+- [Note] Query keys

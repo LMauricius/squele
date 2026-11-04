@@ -34,3 +34,12 @@ Blocks:
 
 Fixes:
 - [Bug] Fixed by
+
+Useful:
+- [Note] Useful for
+
+# [Note] Lasting knowledge (design rules, conventions, pitfalls) that outlives a single Feature; kept in `Notes/`
+---
+$meta:
+  color: '#9b59d0'
+---
