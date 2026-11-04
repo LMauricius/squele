@@ -11,6 +11,7 @@
   ---
   Severity: build
   File: CMakeLists.txt
+  done: true
   ---
   Uses `CMAKE_INSTALL_*DIR` without `include(GNUInstallDirs)`; the `EXPORT` has no `install(EXPORT ...)`, and headers are never installed.
 - [Bug] IndexTable getUnused has no return

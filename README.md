@@ -5,5 +5,18 @@
 - C++20
 
 # Installing
-Currently CMake install doesn't copy headers, 
-so just copy the `include/squele` folder to your favourite include location.
+SQueLe is header-only. Install it with CMake:
+
+```sh
+cmake -S . -B build
+cmake --install build --prefix <prefix>
+```
+
+Then use it from your own CMake project:
+
+```cmake
+find_package(squele REQUIRED)
+target_link_libraries(<target> PRIVATE squele::squele)
+```
+
+You can also copy the `include/squele` folder to any include location.
