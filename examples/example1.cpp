@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <concepts>
 #include <iterator>
 #include <memory>
 #include <span>
@@ -20,6 +21,7 @@ using Indices = std::vector<Index>;
 
 static_assert(Original<Store> && SlotViewable<Store>);
 static_assert(Queryable<Filter<From<Store>>>);
+static_assert(std::same_as<Filter<From<Store>>::View, SlotFilterView<Store>>);
 static_assert(std::forward_iterator<Store::Iterator>);
 
 /**
@@ -35,7 +37,7 @@ struct Recorder {
     Index activeCount = 0;
     Indices created, deleted, replaced, modified;
 
-    void onDelta(const SlotDelta<Index> &d) {
+    void onDelta(const Store::Delta &d) {
         ++deltas;
         activeCount = d.activeCount;
         created = sorted(d.created);

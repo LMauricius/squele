@@ -33,16 +33,41 @@ concept Syncable = requires(T &t, const T &ct) {
     { ct.dirty() } -> std::same_as<bool>;
 };
 
+namespace detail {
+
 /**
- * A view: `Flushable`, but not necessarily `Syncable`.
- * - `T::Delta`: sent to listeners on `flush()`; valid only during the call.
+ * Archetype: the smallest listener of `TDeltaT`, used only to check that a
+ * template `addListener` accepts listeners. Declared only (never called).
+ */
+template <class TDeltaT> struct ListenerArchetype {
+    void onDelta(const TDeltaT &);
+};
+
+} // namespace detail
+
+/**
+ * Accepts listeners of `T::Delta`, without dictating how it stores them
+ * (`Broadcaster` is one way).
+ * - `T::Delta`: sent to listeners; valid only during the call.
+ * - `addListener(p_l)`/`removeListener(p_l)`: for any listener `L` with
+ *   `onDelta(const T::Delta &)` (`onDirty()` is optional).
+ * - `hasListeners()`: whether anyone listens.
+ */
+template <class T>
+concept Listenable = requires(
+    T &t, const T &ct, detail::ListenerArchetype<typename T::Delta> *p_l) {
+    t.addListener(p_l);
+    t.removeListener(p_l);
+    { ct.hasListeners() } -> std::same_as<bool>;
+};
+
+/**
+ * A view: `Flushable` and `Listenable`, but not necessarily `Syncable`.
  * - `T::Query`: the query type that creates this view.
  */
 template <class T>
-concept Viewable = Flushable<T> && requires {
-    typename T::Delta;
-    typename T::Query;
-};
+concept Viewable =
+    Flushable<T> && Listenable<T> && requires { typename T::Query; };
 
 /**
  * A query: a cache key of the `Ledger` that creates a `T::View` on a miss.

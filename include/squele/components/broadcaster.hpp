@@ -60,17 +60,17 @@ template <class TDeltaT> class Broadcaster {
             m_listeners.erase(it);
     }
 
+    /**
+     * @returns whether anyone listens; a view records changes only then
+     */
+    bool hasListeners() const { return !m_listeners.empty(); }
+
   protected:
     Broadcaster() = default;
     // Copying would copy the listeners' back-references
     Broadcaster(const Broadcaster &) = delete;
     Broadcaster &operator=(const Broadcaster &) = delete;
     ~Broadcaster() = default;
-
-    /**
-     * @returns whether anyone listens; a view records changes only then
-     */
-    bool hasListeners() const { return !m_listeners.empty(); }
 
     /**
      * Sends `d` to every listener

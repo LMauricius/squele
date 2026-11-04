@@ -20,8 +20,10 @@
 
 namespace squele {
 
-template <Queryable TSourceQ> class FilterView;
-template <Queryable TSourceQ> class SlotFilterView;
+// Views take their source view, not its query, so their names stay short
+// (`SlotFilterView<Store>`); the query is recovered as `Source::Query`
+template <Viewable TSourceT> class FilterView;
+template <Viewable TSourceT> class SlotFilterView;
 
 /**
  * A query for the items of a source that pass a predicate.
@@ -36,9 +38,8 @@ template <Queryable TSourceQ> class Filter {
     using Source = typename SourceQ::View;
     using Item = typename Source::Item;
     using Predicate = bool (*)(const Item &);
-    using View =
-        std::conditional_t<SlotViewable<Source>, SlotFilterView<SourceQ>,
-                           FilterView<SourceQ>>;
+    using View = std::conditional_t<SlotViewable<Source>,
+                                    SlotFilterView<Source>, FilterView<Source>>;
 
     /**
      * @param source the source's query (`From{p_view}` for an original)
@@ -81,10 +82,10 @@ namespace squele {
  * The view of `Filter` over a source that is not `SlotViewable`.
  * @note Declared only: no such source exists yet.
  */
-template <Queryable TSourceQ> class FilterView {
-    // Depends on TSourceQ, so it fires only when instantiated (see C++20
+template <Viewable TSourceT> class FilterView {
+    // Depends on TSourceT, so it fires only when instantiated (see C++20
     // pitfalls)
-    static_assert(sizeof(TSourceQ) == 0,
+    static_assert(sizeof(TSourceT) == 0,
                   "FilterView is not implemented: use a SlotViewable source");
 };
 
@@ -97,15 +98,14 @@ template <Queryable TSourceQ> class FilterView {
  * It updates eagerly: `onDelta` re-checks only the changed indices while the
  * source is consistent, so the predicate runs once per source change.
  */
-template <Queryable TSourceQ>
-class SlotFilterView
-    : public Broadcaster<SlotDelta<typename TSourceQ::View::Index>> {
+template <Viewable TSourceT>
+class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
   public:
-    using Query = Filter<TSourceQ>;
-    using Source = typename TSourceQ::View;
-    using Item = typename Source::Item;
-    using Index = typename Source::Index;
-    using Delta = SlotDelta<Index>;
+    using SourceT = TSourceT;
+    using Query = Filter<typename SourceT::Query>;
+    using Item = typename SourceT::Item;
+    using Index = typename SourceT::Index;
+    using Delta = typename SourceT::Delta;
     using Iterator = SlotIterator<SlotFilterView>;
 
     /**
@@ -115,7 +115,7 @@ class SlotFilterView
     SlotFilterView(Ledger &ledger, const Query &query)
         : m_source(ledger.getUnsynced(query.source())),
           m_pred(query.predicate()) {
-        static_assert(Dependent<SlotFilterView, Source>);
+        static_assert(Dependent<SlotFilterView, SourceT>);
 
         // Make the source consistent and leave nothing unflushed, so no
         // change is missed between this scan and addListener()
@@ -236,7 +236,7 @@ class SlotFilterView
         }
     }
 
-    std::shared_ptr<Source> m_source; // owned, so it outlives this listener
+    std::shared_ptr<SourceT> m_source; // owned, so it outlives this listener
     typename Query::Predicate m_pred;
     std::vector<bool> m_pass; // per source index: taken and passed
     Index m_activeCount = 0;

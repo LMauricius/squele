@@ -78,3 +78,12 @@
   done: true
   ---
   Removing an unknown listener erases `end()`, silently corrupting memory instead of failing.
+
+## components/broadcaster.hpp
+
+- [Bug] Misspelled onDirty is silently ignored
+  ---
+  Severity: latent
+  File: include/squele/components/broadcaster.hpp
+  ---
+  `addListener` detects `onDirty()` with `if constexpr`, so a listener whose `onDirty` is misspelled or has the wrong signature compiles fine and never receives dirty notifications. Dependent views are protected by `static_assert(Dependent<...>)`, but a plain consumer that relies on `onDirty` (for example, to schedule its own sync) is not. A possible fix is an explicit opt-in, such as `addDirtyListener(p_l)`, that requires `onDirty()` and fails to compile without it.

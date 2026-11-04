@@ -27,7 +27,7 @@ template <class V> struct Mirror {
         for (auto it = v.begin(); it != v.end(); ++it)
             model[it.index()] = *it;
     }
-    void onDelta(const SlotDelta<Index> &d) {
+    void onDelta(const typename V::Delta &d) {
         std::set<Index> seen;
         auto once = [&](Index i) { assert(seen.insert(i).second); };
         for (Index i : d.deleted) {

@@ -26,6 +26,30 @@ Blocks:
 Useful:
 - [Note] Useful for
 
+# [Optimization] A possible later optimization: a short description linking Notes and Hazards; its subtasks are Tasks (concrete steps and open ideas); kept in `Optimizations/`
+---
+$meta:
+  color: '#00c8a0'
+---
+
+Addresses:
+- [Hazard] Addressed by
+
+Useful:
+- [Note] Useful for
+
+# [Hazard] A risk in existing code (speed, memory, safety), with a Severity section and a Possible efforts section; kept in `Hazards/`
+---
+$meta:
+  color: '#ff9f1a'
+---
+
+Addressed by:
+- [Optimization] Addresses
+
+Useful:
+- [Note] Useful for
+
 # [Task] A concrete implementation step, written when implementation starts
 ---
 $meta:
