@@ -34,3 +34,16 @@ Implement the concepts and classes needed for the most basic demo
 - `Filter`<> is a query, constructed from another query and a filter std::function<bool(Item)>
 - If the source is  SlotViewable, the `View` of this query is SlotFilterView
 - Re-checks only those source items that have changed on update
+
+## Tasks
+
+- [Task] Viewable and Queryable concepts
+- [Task] Concept-based Listenable
+- [Task] From query
+- [Task] Ledger cache rework
+- [Task] SlotDelta, SlotDiff and SlotViewable concept
+- [Task] IndexTable slot allocator
+- [Task] Slot item container
+- [Task] SlotList
+- [Task] Filter query and SlotFilterView
+- [Task] Demo example
