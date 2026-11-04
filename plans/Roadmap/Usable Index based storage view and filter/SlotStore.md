@@ -6,7 +6,7 @@ Add `SlotStore<TItemT, TIndexT = std::uint32_t>` in `views/slotStore.hpp`: an `O
 - `erase(i)` destroys the item; the destructor walks the taken flags and destroys the remaining items.
 - `modify(i) -> ItemT &` (records a modification), `operator[](i) const`, `isTaken(i) const`, `activeCount()`, `slotCount()`.
 - The iterator walks the storage and skips free slots.
-- Every mutation is recorded in a `SlotDiff`. `flush()` notifies listeners with its `delta()`, then clears it.
+- Every mutation is recorded in a `SlotDiff`; when the diff was empty before the mutation, `broadcastDirty()` first (see the Pull data flow Note). `flush()` does nothing when the diff is empty; otherwise it notifies listeners with its `delta()`, then clears it.
 - Not copyable or movable.
 
 Blocks:
@@ -16,3 +16,4 @@ Useful:
 - [Note] Slot storage
 - [Note] Deltas and Diffs
 - [Note] View lifetime and listeners
+- [Note] Pull data flow
