@@ -23,3 +23,7 @@ install(EXPORT squeleTargets
 
 # Add the examples
 add_subdirectory(examples)
+
+# Add the tests: ctest --test-dir build
+enable_testing()
+add_subdirectory(tests)

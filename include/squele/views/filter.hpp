@@ -113,7 +113,7 @@ class SlotFilterView
      * listening. The view starts clean.
      */
     SlotFilterView(Ledger &ledger, const Query &query)
-        : m_source(ledger.get_unsynced(query.source())),
+        : m_source(ledger.getUnsynced(query.source())),
           m_pred(query.predicate()) {
         static_assert(Dependent<SlotFilterView, Source>);
 
@@ -212,6 +212,16 @@ class SlotFilterView
     void update(Index i, bool passes, bool replaced) {
         const auto at = static_cast<std::size_t>(i);
         const bool passed = m_pass[at];
+        if (passed != passes) {
+            m_pass[at] = passes;
+            if (passes)
+                ++m_activeCount;
+            else
+                --m_activeCount;
+        }
+        // Without listeners nothing is recorded, so flush() stays a no-op
+        if (!this->hasListeners())
+            return;
         if (passed && passes) {
             if (replaced) {
                 m_diff.erase(i);
@@ -221,12 +231,8 @@ class SlotFilterView
             }
         } else if (passed) {
             m_diff.erase(i);
-            m_pass[at] = false;
-            --m_activeCount;
         } else if (passes) {
             m_diff.create(i);
-            m_pass[at] = true;
-            ++m_activeCount;
         }
     }
 

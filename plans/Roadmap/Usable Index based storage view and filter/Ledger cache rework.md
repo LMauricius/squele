@@ -4,7 +4,7 @@ done: true
 ---
 Rework `core/ledger.hpp` around `Queryable`, with hashed caches and explicit clean-up.
 
-- `get(const Q &q)` and `get_unsynced(const Q &q)`: on a cache miss, call `q.result(*this)` and store the result. `Q` is `std::remove_cvref_t` of the argument. Everything a view needs lives in its query, so no extra constructor arguments: they would be ignored on a hit and are not part of the key.
+- `get(const Q &q)` and `getUnsynced(const Q &q)`: on a cache miss, call `q.result(*this)` and store the result. `Q` is `std::remove_cvref_t` of the argument. Everything a view needs lives in its query, so no extra constructor arguments: they would be ignored on a hit and are not part of the key.
 - Each query type gets one `std::unordered_map<Q, std::shared_ptr<typename Q::View>>`. The per-type maps sit behind a small virtual `CacheBase`, held in `std::unordered_map<std::type_index, std::unique_ptr<CacheBase>>`; `std::any` cannot be iterated generically, which `collect()` needs.
 - `collect()` erases every entry whose `use_count() == 1`, repeating until a pass erases nothing. `clear()` drops everything.
 - `get` calls `sync()` only when the view is `Syncable`.

@@ -23,7 +23,9 @@ namespace squele {
  * indices, and freed indices are reused last freed first.
  * Its query is `From<SlotStore>`. It is neither copyable nor movable
  * (listeners point to it), so keep it in a `shared_ptr`.
- * @note Mutations are recorded and sent to listeners on `flush()`.
+ * @note Mutations are recorded and sent to listeners on `flush()`. Nothing is
+ * recorded while there are no listeners: a listener sees only the mutations
+ * made after it was added.
  */
 template <class TItemT, std::integral TIndexT = std::uint32_t>
 class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
@@ -60,8 +62,10 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
                 m_cells.emplace_back();
             m_cells[i].construct(std::forward<TArgs>(args)...);
             constructed = true;
-            markDirty();
-            m_diff.create(i);
+            if (this->hasListeners()) {
+                markDirty();
+                m_diff.create(i);
+            }
         } catch (...) {
             if (constructed)
                 m_cells[i].destroy();
@@ -78,8 +82,10 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
      */
     void erase(Index i) {
         assert(isTaken(i));
-        markDirty();
-        m_diff.erase(i); // the only step that can throw
+        if (this->hasListeners()) {
+            markDirty();
+            m_diff.erase(i); // the only step that can throw
+        }
         m_cells[i].destroy();
         m_pool.release(i);
     }
@@ -91,8 +97,10 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
      */
     Item &modify(Index i) {
         assert(isTaken(i));
-        markDirty();
-        m_diff.modify(i);
+        if (this->hasListeners()) {
+            markDirty();
+            m_diff.modify(i);
+        }
         return m_cells[i].get();
     }
 

@@ -9,6 +9,7 @@
 #include <cassert>
 #include <iterator>
 #include <memory>
+#include <span>
 #include <vector>
 
 using namespace squele;
@@ -42,7 +43,6 @@ struct Recorder {
         replaced = sorted(d.replaced);
         modified = sorted(d.modified);
     }
-    void onDirty() {}
 
     static Indices sorted(std::span<const Index> s) {
         Indices v(s.begin(), s.end());

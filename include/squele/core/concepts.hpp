@@ -67,16 +67,17 @@ concept Queryable = std::copyable<T> && std::equality_comparable<T> &&
 template <class L, class S>
 concept Listening = requires(L &l, S &s, const typename S::Delta &d) {
     l.onDelta(d);
-    l.onDirty();
     s.addListener(&l);
     s.removeListener(&l);
 };
 
 /**
- * `V` is a view derived from the source `S`: it listens to `S` and syncs to it.
+ * `V` is a view derived from the source `S`: it listens to `S` (including its
+ * `onDirty()` calls, which make `V` dirty) and syncs to it.
  */
 template <class V, class S>
-concept Dependent = Viewable<V> && Syncable<V> && Listening<V, S>;
+concept Dependent = Viewable<V> && Syncable<V> && Listening<V, S> &&
+                    requires(V &v) { v.onDirty(); };
 
 /**
  * A view without sources that is modified by hand. It is never its own query

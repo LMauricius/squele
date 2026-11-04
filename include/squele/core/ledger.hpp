@@ -27,7 +27,7 @@ class Ledger {
      * @returns the cached view, created on the first call with an equal query
      */
     template <Queryable Q> std::shared_ptr<typename Q::View> get(const Q &q) {
-        std::shared_ptr<typename Q::View> p_view = get_unsynced(q);
+        std::shared_ptr<typename Q::View> p_view = getUnsynced(q);
         if constexpr (Syncable<typename Q::View>)
             p_view->sync();
         return p_view;
@@ -38,7 +38,7 @@ class Ledger {
      * @returns the cached view, created on the first call with an equal query
      */
     template <Queryable Q>
-    std::shared_ptr<typename Q::View> get_unsynced(const Q &q) {
+    std::shared_ptr<typename Q::View> getUnsynced(const Q &q) {
         // From is not cached: the key would keep its own view alive forever
         if constexpr (std::same_as<Q, From<typename Q::View>>) {
             return q.result(*this);

@@ -10,8 +10,9 @@ namespace squele {
 
 /**
  * Mixin that stores listeners and sends them deltas, without virtual calls.
- * A listener is anything with `onDelta(const DeltaT &)` and `onDirty()` (see
- * `Listening`); it inherits nothing.
+ * A listener is anything with `onDelta(const DeltaT &)` (see `Listening`) and
+ * optionally `onDirty()` (dependent views need it; plain consumers do not); it
+ * inherits nothing.
  * @warning Adding or removing listeners from inside a listener call is UB: it
  * invalidates the broadcast loop.
  * @warning Listeners are stored as raw pointers: remove a listener before it
@@ -29,19 +30,20 @@ template <class TDeltaT> class Broadcaster {
      * through a pointer of the same type
      */
     template <class L>
-        requires requires(L &l, const DeltaT &d) {
-            l.onDelta(d);
-            l.onDirty();
-        }
+        requires requires(L &l, const DeltaT &d) { l.onDelta(d); }
     void addListener(L *p_l) {
         // Captureless lambdas decay to function pointers that cast the object
         // back to L: no vtable in L, no allocation per entry
-        m_listeners.push_back(
-            {p_l,
-             [](void *p_obj, const DeltaT &d) {
-                 static_cast<L *>(p_obj)->onDelta(d);
-             },
-             [](void *p_obj) { static_cast<L *>(p_obj)->onDirty(); }});
+        Entry e{p_l,
+                [](void *p_obj, const DeltaT &d) {
+                    static_cast<L *>(p_obj)->onDelta(d);
+                },
+                nullptr};
+        if constexpr (requires(L &l) { l.onDirty(); })
+            e.p_onDirty = [](void *p_obj) {
+                static_cast<L *>(p_obj)->onDirty();
+            };
+        m_listeners.push_back(e);
     }
 
     /**
@@ -66,6 +68,11 @@ template <class TDeltaT> class Broadcaster {
     ~Broadcaster() = default;
 
     /**
+     * @returns whether anyone listens; a view records changes only then
+     */
+    bool hasListeners() const { return !m_listeners.empty(); }
+
+    /**
      * Sends `d` to every listener
      */
     void broadcast(const DeltaT &d) const {
@@ -78,12 +85,14 @@ template <class TDeltaT> class Broadcaster {
      */
     void broadcastDirty() const {
         for (const Entry &e : m_listeners)
-            e.p_onDirty(e.p_obj);
+            if (e.p_onDirty)
+                e.p_onDirty(e.p_obj);
     }
 
   private:
     /**
-     * A type-erased listener: the object and two thunks that cast it back
+     * A type-erased listener: the object and thunks that cast it back.
+     * `p_onDirty` is null for listeners without `onDirty()`.
      */
     struct Entry {
         void *p_obj;
