@@ -1,4 +1,7 @@
 # [Task] Viewable and Queryable concepts
+---
+done: true
+---
 Replace the virtual component bases with concepts in `core/concepts.hpp`, and replace the `View` and `Query` concepts with the Feature's ones.
 
 - `Flushable<T>`: `t.flush()`. `Syncable<T>`: `t.sync()` and `{ t.dirty() } -> bool` (true when `sync()` would change the contents). They replace the virtual bases in `components/flushable.hpp` and `components/syncable.hpp`, which are deleted.

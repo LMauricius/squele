@@ -1,4 +1,7 @@
 # [Task] Broadcaster mixin
+---
+done: true
+---
 Replace the `Listenable` mixin in `components/listenable.hpp` with `Broadcaster` in `components/broadcaster.hpp` to drop virtual listeners.
 
 - A listener is anything with `onDelta(const DeltaT &)` and `onDirty()` (see `Listening`); it inherits nothing.

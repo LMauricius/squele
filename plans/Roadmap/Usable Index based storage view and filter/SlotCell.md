@@ -1,4 +1,7 @@
 # [Task] SlotCell
+---
+done: true
+---
 Add `SlotCell<TItemT>` in `bits/slotCell.hpp`: raw, aligned storage for a single item that is constructed and destroyed explicitly.
 
 - `construct(args...)` uses `std::construct_at`; `destroy()` uses `std::destroy_at`; `get()` returns the item through `std::launder`.

@@ -1,7 +1,10 @@
 # [Task] Filter query and SlotFilterView
+---
+done: true
+---
 Add `Filter<TSourceQ>`, the declared `FilterView` and the implemented `SlotFilterView` in `views/filter.hpp`.
 
-`Filter` holds a copy of the source query (a `From` for an `Original` source) and a predicate `bool (*)(const Item &)`. Equality and hash combine the source query and the pointer. `View` is `SlotFilterView` when the source view is `SlotViewable`, otherwise `FilterView`. Filters nest: a `SlotFilterView` is itself `SlotViewable`.
+`Filter` holds a copy of the source query (a `From` for an `Original` source) and a predicate `bool (*)(const Item &)`. Equality and hash combine the source query and the pointer (hashes are mixed with `combineHash` from `bits/hash.hpp`, shared by future composite queries). `View` is `SlotFilterView` when the source view is `SlotViewable`, otherwise `FilterView`. Filters nest: a `SlotFilterView` is itself `SlotViewable`.
 
 `FilterView` is declared only; instantiating it fails with a `static_assert` until a non-slot source exists.
 

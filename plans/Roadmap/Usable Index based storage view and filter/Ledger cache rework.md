@@ -1,4 +1,7 @@
 # [Task] Ledger cache rework
+---
+done: true
+---
 Rework `core/ledger.hpp` around `Queryable`, with hashed caches and explicit clean-up.
 
 - `get(const Q &q)` and `get_unsynced(const Q &q)`: on a cache miss, call `q.result(*this)` and store the result. `Q` is `std::remove_cvref_t` of the argument. Everything a view needs lives in its query, so no extra constructor arguments: they would be ignored on a hit and are not part of the key.

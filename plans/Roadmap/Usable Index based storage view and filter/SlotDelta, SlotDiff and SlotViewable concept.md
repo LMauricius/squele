@@ -1,4 +1,7 @@
 # [Task] SlotDelta, SlotDiff and SlotViewable concept
+---
+done: true
+---
 Replace `deltas/indexable.hpp` with `deltas/slot.hpp` (holding `SlotDelta` and `SlotDiff`), and add the `SlotViewable` concept.
 
 `SlotDelta<TIndexT>` holds `activeCount`, `slotCount` and one `std::span<const IndexT>` per change kind: `created`, `deleted`, `replaced` and `modified`. `moved` is a span of `{from, to}` pairs. `slotCount` replaces `maxIndex`. Spans are *unordered* (touch order): index order helps no planned consumer (a sort view orders by key, not by index), so no view pays O(k log k) per flush. A consumer that needs order sorts its own copy.

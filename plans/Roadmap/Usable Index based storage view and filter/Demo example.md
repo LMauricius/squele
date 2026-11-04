@@ -1,4 +1,7 @@
 # [Task] Demo example
+---
+done: true
+---
 Rewrite `examples/example1.cpp` as the basic demo, with asserts as a self-check (there are no tests yet).
 
 1. Create a `SlotStore<int>` with `std::make_shared` and a `Ledger`.

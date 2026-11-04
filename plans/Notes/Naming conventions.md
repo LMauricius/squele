@@ -6,4 +6,5 @@ Names say what a thing is and what it is used for, and follow one scheme everywh
 - **Queries and their views pair up**: the query `X` creates `XView`; when the source is slot-based, it creates `SlotXView` instead (`Filter`, `FilterView`, `SlotFilterView`). A query that wraps an existing view reads as a preposition: `From{p_view}`.
 - **Change types**: a `*Delta` is a temporary description of changes, a `*Diff` owns accumulated changes (see the Deltas and Diffs Note).
 - **The `Slot` prefix** marks everything built around sparse, reusable indices.
-- Free functions are verbs: `pull(view)`.
+- Free functions are verbs: `pull(view)`, `combineHash(seed, h)`.
+- Member types that concepts require drop the `T` suffix (`Query`, `View`, `Delta`, `Item`, `Index`); other aliases of template parameters keep it (`TIndexT` becomes `IndexT`).
