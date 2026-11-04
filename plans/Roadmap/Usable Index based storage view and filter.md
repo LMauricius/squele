@@ -12,10 +12,10 @@ Implement the concepts and classes needed for the most basic demo. Concepts are 
 - Has a typedef `View`
 - Method `result(Ledger &, ...)` that returns a `shared_ptr` to a `View`. The remaining arguments are passed to the constructor, if the view is created
 - Can be passed to a `Ledger`, which caches views keyed by queries and creates a view only on a cache miss. `Ledger::collect()` releases views nobody else uses
-## Listeners
-- A listener is anything with `onDelta(const Delta &)`; it inherits nothing
-- The `Listenable<Delta>` mixin stores listeners without virtual calls
-- `SelectionOf`: a `Viewable` and `Syncable` view that listens to a source
+## concepts `Listening` and `Dependent`
+- `Listening<L, S>`: `L` has `onDelta(const S::Delta &)` and can be added to `S`; it inherits nothing
+- `Dependent<V, S>`: `V` is a `Viewable` and `Syncable` view that is `Listening` to its source `S`
+- The `Broadcaster<Delta>` mixin stores listeners and sends them deltas, without virtual calls
 ## concept `SlotViewable`
 - Extension of `Viewable` whose elements can be accessed by indices
 - `Delta`s (`SlotDelta`) contain the following info:
@@ -33,10 +33,10 @@ Implement the concepts and classes needed for the most basic demo. Concepts are 
 - ...but has no dependencies (not `Syncable`), and it's instead modifiable
 - Not a listener
 - Its query is `From<T>`, a copyable query that holds the original's `shared_ptr` and returns it
-## class `SlotList`
+## class `SlotStore`
 - An `Original` and a `SlotViewable`
 - Items manually added
-- Items live in `Slot`s (raw storage without a flag, to save space); taken slots are tracked by a `std::vector<bool>`
+- Items live in `SlotCell`s (raw storage without a flag, to save space); taken slots are tracked by a `std::vector<bool>`
 ## class `Filter`, `FilterView` and `SlotFilterView`
 - `Filter<>` is a query, constructed from another query and a predicate function pointer `bool (*)(const Item &)` (a function pointer, unlike `std::function`, is comparable and hashable)
 - If the source is `SlotViewable`, the `View` of this query is `SlotFilterView`, which reuses the source's indices
@@ -46,12 +46,16 @@ Implement the concepts and classes needed for the most basic demo. Concepts are 
 ## Tasks
 
 - [Task] Viewable and Queryable concepts
-- [Task] Concept-based Listenable
+- [Task] Broadcaster mixin
 - [Task] From query
 - [Task] Ledger cache rework
 - [Task] SlotDelta, SlotDiff and SlotViewable concept
-- [Task] IndexTable slot allocator
-- [Task] Slot item container
-- [Task] SlotList
+- [Task] SlotIndexPool
+- [Task] SlotCell
+- [Task] SlotStore
 - [Task] Filter query and SlotFilterView
 - [Task] Demo example
+
+Useful:
+- [Note] Naming conventions
+- [Note] Concepts over virtual bases

@@ -23,6 +23,9 @@ $meta:
 Blocks:
 - [Feature] Blocked by
 
+Useful:
+- [Note] Useful for
+
 # [Task] A concrete implementation step, written when implementation starts
 ---
 $meta:

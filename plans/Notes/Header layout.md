@@ -2,7 +2,7 @@
 Where code lives under `include/squele/`:
 
 - `core/`: concepts, the `Ledger` and the basic queries (`From`).
-- `components/`: mixin base classes for views (such as `Listenable`).
-- `bits/`: tiny reusable components and functions (such as `IndexTable`, `Slot` and `pull`).
+- `components/`: mixin base classes for views (such as `Broadcaster`).
+- `bits/`: tiny reusable components and functions (such as `SlotIndexPool`, `SlotCell` and `pull`).
 - `deltas/`: change descriptions (`*Delta`) and their owning accumulators (`*Diff`).
 - `views/`: concrete views and the queries that create them.

@@ -5,13 +5,13 @@ Add `Filter<TSourceQ>`, the declared `FilterView` and the implemented `SlotFilte
 
 `FilterView` is declared only; instantiating it fails with a `static_assert` until a non-slot source exists.
 
-`SlotFilterView` satisfies `SelectionOf` its source and uses nothing of the source besides `ListenerOf` and the `SlotViewable` members. It reuses the source's indices: index `i` is taken when the source has it taken and the predicate passed. It stores a `std::vector<bool>` of pass flags and a pass counter (its `activeCount`), and reads items from the source, so it owns no item copies.
+`SlotFilterView` is `Dependent` on its source and uses nothing of the source besides `Listening` and the `SlotViewable` members. It reuses the source's indices: index `i` is taken when the source has it taken and the predicate passed. It stores a `std::vector<bool>` of pass flags and a pass counter (its `activeCount`), and reads items from the source, so it owns no item copies.
 
 - Construction: gets the source with `ledger.get_unsynced(source)`, keeps the `shared_ptr`, registers as a listener and checks every source item.
 - `onDelta`: adds the source delta to a pending `SlotDiff`.
 - `sync()`: first `pull(*source)`, then re-checks only the pending indices, clears the pending diff, and records the transitions in its own `SlotDiff`.
 - Transitions per pending index: fail to pass is created; pass to fail (including a source delete) is deleted; pass to pass forwards the source's kind (replaced or modified); fail to fail records nothing.
-- `flush()`: emits its own diff's `delta()`, as `SlotList` does.
+- `flush()`: emits its own diff's `delta()`, as `SlotStore` does.
 - The destructor removes the listener from the source.
 
 Blocks:

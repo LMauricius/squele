@@ -1,5 +1,5 @@
-# [Task] IndexTable slot allocator
-Finish `bits/indexTable.hpp` as the index allocator for slot storage, with LIFO reuse of freed indices.
+# [Task] SlotIndexPool
+Rename `bits/indexTable.hpp` to `bits/slotIndexPool.hpp` and finish it as the index allocator for slot storage, with LIFO reuse of freed indices.
 
 - State: `std::vector<bool>` of taken flags plus a `std::vector<IndexT>` stack of freed indices.
 - `acquire()`: pops the free stack, or appends a new index when it is empty. O(1) amortized. When it appends, the returned index equals the old `slotCount()`, so the owner knows to grow its storage.
@@ -9,7 +9,7 @@ Finish `bits/indexTable.hpp` as the index allocator for slot storage, with LIFO 
 - Add the missing `<concepts>` include.
 
 Blocks:
-- [Task] SlotList
+- [Task] SlotStore
 
 Fixes:
 - [Bug] IndexTable getUnused has no return

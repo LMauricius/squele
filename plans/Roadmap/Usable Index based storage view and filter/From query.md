@@ -6,7 +6,7 @@ Add `From<TViewT>` in `core/from.hpp`: a query that takes a view's `shared_ptr` 
 - Equality and `std::hash` compare the pointer (identity).
 
 Blocks:
-- [Task] SlotList
+- [Task] SlotStore
 - [Task] Ledger cache rework
 
 Useful:

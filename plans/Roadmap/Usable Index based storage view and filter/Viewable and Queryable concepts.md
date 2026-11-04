@@ -7,8 +7,8 @@ Replace the virtual component bases with concepts in `core/concepts.hpp`, and re
 - `Queryable<T>`: declares `T::View` satisfying `Viewable`; `std::copyable<T>`; `std::equality_comparable<T>`; `std::hash<T>` is callable and returns `std::size_t`.
 - The `result(Ledger &, Args &&...)` member is variadic, so the concept cannot check it; it is documented instead and checked by `Ledger` at the call site.
 - Comparison across different query types is implicit: the `Ledger` buckets caches by query type, so queries of different types never meet.
-- `ListenerOf<L, S>`: `l.onDelta(const S::Delta &)`, `s.addListener(&l)` and `s.removeListener(&l)`.
-- `SelectionOf<T, S>`: `Viewable<T>`, `Syncable<T>` and `ListenerOf<T, S>`; a view derived from a source.
+- `Listening<L, S>`: `l.onDelta(const S::Delta &)`, `s.addListener(&l)` and `s.removeListener(&l)`.
+- `Dependent<V, S>`: `Viewable<V>`, `Syncable<V>` and `Listening<V, S>`; a view derived from source `S`.
 - `Original<T>`: `Viewable<T>`, not `Syncable<T>`, and `T::Query` is `From<T>` (forward-declared).
 
 Blocks:
@@ -22,6 +22,7 @@ Fixes:
 - [Bug] ListenerOf passes listener by value
 
 Useful:
+- [Note] Naming conventions
 - [Note] Concepts over virtual bases
 - [Note] Header layout
 - [Note] Pull data flow

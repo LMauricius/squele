@@ -30,7 +30,7 @@ Moves are not recorded yet: no source moves items, so `moved` stays empty until 
 `SlotViewable<T>`: `Viewable<T>`; `T::Index` is integral; `T::Item`; `T::Delta` is `SlotDelta<T::Index>`; `isTaken(i) const`, `operator[](i) const`, `activeCount() const`, `slotCount() const`; `begin()`/`end()` iterate only taken indices. The iterator yields items, and `it.index()` returns the current index.
 
 Blocks:
-- [Task] SlotList
+- [Task] SlotStore
 
 Useful:
 - [Note] Deltas and Diffs
