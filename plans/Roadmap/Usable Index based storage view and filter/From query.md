@@ -5,6 +5,7 @@ Add `From<TViewT>` in `core/from.hpp`: a query that takes a view's `shared_ptr` 
 - `result(Ledger &)` returns the held pointer; it never constructs a view.
 - Equality and `std::hash` compare the pointer (identity).
 - The `Ledger` does not cache `From`: a cached key would hold its own reference, so `collect()` could never release the view.
+- A query that contains a `From` (such as a `Filter` over an original) keeps the original alive for as long as that query is cached.
 
 Blocks:
 - [Task] SlotList

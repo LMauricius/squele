@@ -1,5 +1,5 @@
 # [Task] Slot item container
-Add `Slot<TItemT>` in `bits/slot.hpp`: raw, aligned storage for a single item that is constructed and destroyed explicitly.
+Add `Slot<TItemT>` in `bits/slot.hpp`: raw, aligned storage for a single item that is constructed and destroyed explicitly. It replaces `std::optional` to save space: the flag (padded to the item's alignment) is dropped.
 
 - `construct(args...)` uses `std::construct_at`; `destroy()` uses `std::destroy_at`; `get()` returns the item through `std::launder`.
 - It holds no "taken" flag. The owner already tracks that (the `std::vector<bool>` in `IndexTable`), so a flag here would duplicate it.

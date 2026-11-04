@@ -1,38 +1,46 @@
 # [Feature] Usable Index based storage view and filter
-Implement the concepts and classes needed for the most basic demo
+Implement the concepts and classes needed for the most basic demo. Concepts are preferred to virtual base classes, and each concept requires only the members its users call, so no class implements a no-op.
+## concepts `Flushable` and `Syncable`
+- `Flushable`: has `flush()`, which sends the changes since the last flush to listeners
+- `Syncable`: has `sync()`, which brings the contents up to date with the sources
 ## concept `Viewable`
-- Has a defined `Delta` class, whose instance is sent to listeners on `flush()` to describe changes since the last flush
+- `Flushable`, but not necessarily `Syncable`
+- Has a defined `Delta` class, whose instance is sent to listeners on `flush()` to describe changes since the last flush. A delta is temporary: it is valid only during the listener call
 - Has a typedef `Query`
 ## concept `Queryable`
-- Comparable with any Queryable type, hashable
+- Copyable, equality comparable and hashable (queries are cache keys)
 - Has a typedef `View`
-- method `result(...)` that returns a shared_ptr to a `View`. Arguments are passed to the constructor, if the view is created
-- Can be added to a Ledger, to cache views (never creates a new view then, just keyed by queries)
+- Method `result(Ledger &, ...)` that returns a `shared_ptr` to a `View`. The remaining arguments are passed to the constructor, if the view is created
+- Can be passed to a `Ledger`, which caches views keyed by queries and creates a view only on a cache miss. `Ledger::collect()` releases views nobody else uses
+## Listeners
+- A listener is anything with `onDelta(const Delta &)`; it inherits nothing
+- The `Listenable<Delta>` mixin stores listeners without virtual calls
+- `SelectionOf`: a `Viewable` and `Syncable` view that listens to a source
 ## concept `SlotViewable`
-- Extension of `View` whose elements can be accessed by indexes
-- `Delta`s contain the following info:
-	- Created indices
+- Extension of `Viewable` whose elements can be accessed by indices
+- `Delta`s (`SlotDelta`) contain the following info:
+  - Created indices
   - Deleted indices
-  - Replaced  (delete+create at same index counts as replace)
+  - Replaced indices (delete+create at the same index counts as replace)
   - Modified indices (valid references kept)
   - Moved indices (valid references kept)
-- The items can be accessed by an index
+- Changes are accumulated between flushes in a self-sufficient `SlotDiff`
 - Deleting items can make indices sparse. Check if an index is used by `isTaken() const`
-- If possible, freed indices are reused
-- It is iterable, with iterator skipping freed indices
+- Freed indices are reused, last freed first
+- It is iterable, with the iterator skipping freed indices
 ## concept `Original`
 - Also a `Viewable`
-- ...but has no dependencies, and it's instead modifiable.
-- Not a Listener
-- It is its own query (that returns itself, as a reference)
-
+- ...but has no dependencies (not `Syncable`), and it's instead modifiable
+- Not a listener
+- Its query is `From<T>`, a copyable query that holds the original's `shared_ptr` and returns it
 ## class `SlotList`
-- It's also a `SlotViewable` and class `Origin<>`
+- An `Original` and a `SlotViewable`
 - Items manually added
-
-## class `Filter`, `FilterView`  and `SlotFilterView`
-- `Filter`<> is a query, constructed from another query and a filter std::function<bool(Item)>
-- If the source is  SlotViewable, the `View` of this query is SlotFilterView
+- Items live in `Slot`s (raw storage without a flag, to save space); taken slots are tracked by a `std::vector<bool>`
+## class `Filter`, `FilterView` and `SlotFilterView`
+- `Filter<>` is a query, constructed from another query and a predicate function pointer `bool (*)(const Item &)` (a function pointer, unlike `std::function`, is comparable and hashable)
+- If the source is `SlotViewable`, the `View` of this query is `SlotFilterView`, which reuses the source's indices
+- `FilterView`, for other sources, is only declared for now
 - Re-checks only those source items that have changed on update
 
 ## Tasks
