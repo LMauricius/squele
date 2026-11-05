@@ -8,3 +8,5 @@ A *Diff* is self-sufficient: it owns the changes accumulated between flushes, co
 A view with nothing to report notifies nobody on `flush()`; this keeps repeated pulls cheap.
 
 For slots, "one past the largest index that may be taken" (`slotCount`) is used instead of "largest index", which has no valid value for an empty view.
+
+A Delta may carry several forms of the same changes (for example index spans and bit masks). New forms are added next to the existing ones, never instead of them, and only when some listener gets faster with them; each listener reads whichever form is cheapest for its work.

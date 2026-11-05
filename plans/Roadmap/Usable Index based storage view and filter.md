@@ -1,4 +1,7 @@
 # [Feature] Usable Index based storage view and filter
+---
+done: true
+---
 Implement the concepts and classes needed for the most basic demo. Concepts are preferred to virtual base classes, and each concept requires only the members its users call, so no class implements a no-op.
 ## concepts `Flushable` and `Syncable`
 - `Flushable`: has `flush()`, which sends the changes since the last flush to listeners
