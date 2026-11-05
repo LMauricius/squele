@@ -3,7 +3,11 @@
 #define H_INCLUDED_SQUELE_COMPONENTS_BROADCASTER
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cassert>
+#include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace squele {
@@ -19,10 +23,15 @@ namespace squele {
  * or this object dies.
  * @warning Listener calls must not throw; an exception leaves the remaining
  * listeners without the change.
+ *
+ * It also counts the listeners' *interests*: flags (`DeltaT::Interests`, one
+ * bit per delta member) naming the delta members someone reads. The owner
+ * fills only the members in `interests()`.
  */
 template <class TDeltaT> class Broadcaster {
   public:
     using DeltaT = TDeltaT;
+    using Interests = typename DeltaT::Interests;
 
     /**
      * Adds a listener. A listener added n times is notified n times.
@@ -65,6 +74,38 @@ template <class TDeltaT> class Broadcaster {
      */
     bool hasListeners() const { return !m_listeners.empty(); }
 
+    /**
+     * Counts one more interest in each flag of `m`. Independent of
+     * `addListener`: a listener adds its interests before or right after it
+     * is added, and removes them when it stops listening.
+     * @note Adding a flag twice needs two `removeInterests` to drop it.
+     */
+    void addInterests(Interests m) {
+        for (; m; m &= m - 1) {
+            const int b = std::countr_zero(m);
+            if (m_interestCounts[b]++ == 0)
+                m_interests |= Interests(Interests{1} << b);
+        }
+    }
+
+    /**
+     * Counts one less interest in each flag of `m`
+     * @warning Removing a flag that was not added is UB (asserted)
+     */
+    void removeInterests(Interests m) {
+        for (; m; m &= m - 1) {
+            const int b = std::countr_zero(m);
+            assert(m_interestCounts[b] > 0);
+            if (--m_interestCounts[b] == 0)
+                m_interests &= Interests(~(Interests{1} << b));
+        }
+    }
+
+    /**
+     * @returns the flags with a non-zero count, in O(1)
+     */
+    Interests interests() const { return m_interests; }
+
   protected:
     Broadcaster() = default;
     // Copying would copy the listeners' back-references
@@ -101,6 +142,11 @@ template <class TDeltaT> class Broadcaster {
     };
 
     std::vector<Entry> m_listeners;
+    // Per flag bit: how many interests in it were added and not removed
+    std::array<std::uint32_t, std::numeric_limits<Interests>::digits>
+        m_interestCounts{};
+    // Bits whose count is non-zero, cached for interests()
+    Interests m_interests = 0;
 };
 
 } // namespace squele

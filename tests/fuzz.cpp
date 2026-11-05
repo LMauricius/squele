@@ -117,6 +117,9 @@ int main() {
     store->addListener(&ms);
     evens->addListener(&me);
     bigEvens->addListener(&mb);
+    store->addInterests(SlotInterest::ALL);
+    evens->addInterests(SlotInterest::ALL);
+    bigEvens->addInterests(SlotInterest::ALL);
 
     // A bulk start spreads indices over several words, so both onDelta paths
     // (per index and per word) run
@@ -168,6 +171,9 @@ int main() {
     store->removeListener(&ms);
     evens->removeListener(&me);
     bigEvens->removeListener(&mb);
+    store->removeInterests(SlotInterest::ALL);
+    evens->removeInterests(SlotInterest::ALL);
+    bigEvens->removeInterests(SlotInterest::ALL);
 
     // collect chain: dropping bigEvens frees it and evens after 2 passes
     std::weak_ptr<decltype(evens)::element_type> we = evens;
@@ -175,5 +181,47 @@ int main() {
     bigEvens.reset();
     ledger.collect();
     assert(we.expired());
+
+    // Interests (the filters are gone, so only `rec` holds any): counted
+    // per flag, and only interesting members are filled. The delta is read
+    // inside the call: its spans die with the flush
+    {
+        namespace SI = SlotInterest;
+        struct Rec {
+            Index e = 0;
+            int n = 0;
+            std::vector<Index> created;
+            std::size_t others = 0; // total size of the other members
+            bool touchedE = false;
+            void onDelta(const Store::Delta &d) {
+                ++n;
+                created.assign(d.created.begin(), d.created.end());
+                others = d.deleted.size() + d.replaced.size() +
+                         d.modified.size() + d.touchedWords.size() +
+                         d.changes.size();
+                touchedE = e < d.touched.size() && d.touched.test(e);
+            }
+        } rec;
+        store->addListener(&rec);
+        store->addInterests(SI::CREATED | SI::TOUCHED);
+        store->addInterests(SI::CREATED);
+        store->removeInterests(SI::CREATED);
+        assert(store->interests() == (SI::CREATED | SI::TOUCHED));
+        rec.e = store->emplace(1);
+        store->erase(live.back());
+        live.pop_back();
+        pull(*store);
+        assert(rec.n == 1 && rec.created == std::vector{rec.e});
+        assert(rec.others == 0 && rec.touchedE);
+
+        // Counts only: still notified, every member empty
+        store->removeInterests(SI::CREATED | SI::TOUCHED);
+        assert(store->interests() == 0);
+        store->modify(rec.e) = 3;
+        pull(*store);
+        assert(rec.n == 2 && rec.created.empty() && rec.others == 0 &&
+               !rec.touchedE);
+        store->removeListener(&rec);
+    }
     std::puts("FUZZ_OK");
 }

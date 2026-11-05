@@ -131,10 +131,14 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
                 ++m_activeCount;
             }
         }
+        m_source->addInterests(sourceInterests);
         m_source->addListener(this);
     }
 
-    ~SlotFilterView() { m_source->removeListener(this); }
+    ~SlotFilterView() {
+        m_source->removeListener(this);
+        m_source->removeInterests(sourceInterests);
+    }
 
     /**
      * Re-checks the changed source indices and records the transitions.
@@ -213,13 +217,14 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     }
 
     /**
-     * Sends the changes since the last flush to listeners; does nothing when
-     * there are none.
+     * Sends the changes since the last flush to listeners, filling only the
+     * delta members in `interests()`; does nothing when there are none.
      */
     void flush() {
         if (m_diff.empty())
             return;
-        this->broadcast(m_diff.delta(m_activeCount, slotCount()));
+        this->broadcast(
+            m_diff.delta(m_activeCount, slotCount(), this->interests()));
         m_diff.clear();
     }
 
@@ -243,6 +248,12 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     Iterator end() const { return {this, slotCount()}; }
 
   private:
+    // Read from the source's deltas: the spans by the per-index path, the
+    // bits by the word path (`changes` only while recording). Fixed, since
+    // `m_pass` needs every change whatever this view's listeners want
+    static constexpr typename Delta::Interests sourceInterests =
+        SlotInterest::ALL & ~SlotInterest::MOVED;
+
     bool check(Index i) const { return m_pred((*m_source)[i]); }
 
     /**

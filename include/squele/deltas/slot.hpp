@@ -29,6 +29,25 @@ enum class SlotChange : std::uint8_t {
 };
 
 /**
+ * Flags naming the members of `SlotDelta` a listener reads, one bit per
+ * member. A listener adds them to its source (`addInterests`), and the source
+ * fills only the members someone asked for; the rest stay empty.
+ * `activeCount` and `slotCount` are always filled.
+ */
+namespace SlotInterest {
+using Mask = std::uint8_t;
+inline constexpr Mask CREATED = 1 << 0;
+inline constexpr Mask DELETED = 1 << 1;
+inline constexpr Mask REPLACED = 1 << 2;
+inline constexpr Mask MODIFIED = 1 << 3;
+inline constexpr Mask MOVED = 1 << 4;
+inline constexpr Mask TOUCHED = 1 << 5;
+inline constexpr Mask TOUCHED_WORDS = 1 << 6;
+inline constexpr Mask CHANGES = 1 << 7;
+inline constexpr Mask ALL = 0xFF;
+} // namespace SlotInterest
+
+/**
  * Changes of a slot-based view since its last flush.
  * A delta is temporary: its spans view storage owned by the flushing view, so
  * it is valid only during the listener call.
@@ -38,9 +57,12 @@ enum class SlotChange : std::uint8_t {
  *   updating per-slot flags 64 at a time.
  * @note Every index appears in at most one span. Spans are *unordered*; a
  * consumer that needs index order walks the touched words instead.
+ * @note A member is filled only while some listener has its `SlotInterest`
+ * flag added; otherwise it is empty.
  */
 template <std::integral TIndexT> struct SlotDelta {
     using IndexT = TIndexT;
+    using Interests = SlotInterest::Mask;
 
     /**
      * An index that moved; references to its item stay valid
@@ -131,38 +153,46 @@ template <std::integral TIndexT> class SlotDiff {
     void modify(IndexT i) { record(i, SlotChange::modified); }
 
     /**
-     * @returns the accumulated changes
+     * @returns the accumulated changes; only the members flagged in `wanted`
+     * are filled, the rest are empty
      * @note The returned spans are valid until this diff changes
      */
-    DeltaT delta(IndexT activeCount, IndexT slotCount) {
-        // Fill the per-kind buffers; clear() keeps their capacity
+    DeltaT delta(IndexT activeCount, IndexT slotCount,
+                 SlotInterest::Mask wanted) {
+        namespace SI = SlotInterest;
+        // Fill the wanted per-kind buffers; clear() keeps their capacity
         m_created.clear();
         m_deleted.clear();
         m_replaced.clear();
         m_modified.clear();
+        // Indexed by SlotChange; unwanted kinds map to null, so the walk
+        // skips them with one test
+        static_assert(static_cast<int>(SlotChange::modified) == 5);
+        std::vector<IndexT> *const p_out[] = {
+            nullptr, // untouched (never visited)
+            nullptr, // nothing
+            wanted & SI::CREATED ? &m_created : nullptr,
+            wanted & SI::DELETED ? &m_deleted : nullptr,
+            wanted & SI::REPLACED ? &m_replaced : nullptr,
+            wanted & SI::MODIFIED ? &m_modified : nullptr};
         // Walking the touched words yields each word's indices in ascending
         // order
-        forEachTouched([&](std::size_t at) {
-            const auto i = static_cast<IndexT>(at);
-            switch (m_kinds[at]) {
-            case SlotChange::created:
-                m_created.push_back(i);
-                break;
-            case SlotChange::deleted:
-                m_deleted.push_back(i);
-                break;
-            case SlotChange::replaced:
-                m_replaced.push_back(i);
-                break;
-            case SlotChange::modified:
-                m_modified.push_back(i);
-                break;
-            default: // SlotChange::nothing
-                break;
-            }
-        });
-        return {activeCount, slotCount, m_created, m_deleted,      m_replaced,
-                m_modified,  {},        m_touched, m_touchedWords, m_kinds};
+        if (wanted & (SI::CREATED | SI::DELETED | SI::REPLACED | SI::MODIFIED))
+            forEachTouched([&](std::size_t at) {
+                if (auto *p = p_out[static_cast<std::size_t>(m_kinds[at])])
+                    p->push_back(static_cast<IndexT>(at));
+            });
+
+        // The bit members view the diff's own state, so they cost nothing
+        DeltaT d{activeCount, slotCount,  m_created,
+                 m_deleted,   m_replaced, m_modified};
+        if (wanted & SI::TOUCHED)
+            d.touched = m_touched;
+        if (wanted & SI::TOUCHED_WORDS)
+            d.touchedWords = m_touchedWords;
+        if (wanted & SI::CHANGES)
+            d.changes = m_kinds;
+        return d;
     }
 
     /**

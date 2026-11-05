@@ -52,13 +52,19 @@ template <class TDeltaT> struct ListenerArchetype {
  * - `addListener(p_l)`/`removeListener(p_l)`: for any listener `L` with
  *   `onDelta(const T::Delta &)` (`onDirty()` is optional).
  * - `hasListeners()`: whether anyone listens.
+ * - `addInterests(m)`/`removeInterests(m)`: count interests in the
+ *   `T::Delta::Interests` flags `m`; only members someone is interested in
+ *   are filled.
  */
 template <class T>
-concept Listenable = requires(
-    T &t, const T &ct, detail::ListenerArchetype<typename T::Delta> *p_l) {
+concept Listenable = requires(T &t, const T &ct,
+                              detail::ListenerArchetype<typename T::Delta> *p_l,
+                              typename T::Delta::Interests m) {
     t.addListener(p_l);
     t.removeListener(p_l);
     { ct.hasListeners() } -> std::same_as<bool>;
+    t.addInterests(m);
+    t.removeInterests(m);
 };
 
 /**

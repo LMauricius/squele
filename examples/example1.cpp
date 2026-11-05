@@ -73,6 +73,10 @@ int main() {
     // 3. A recording listener
     Recorder rec;
     evens->addListener(&rec);
+    // A listener asks for the delta members it reads; the rest stay empty
+    constexpr auto recorded = SlotInterest::CREATED | SlotInterest::DELETED |
+                              SlotInterest::REPLACED | SlotInterest::MODIFIED;
+    evens->addInterests(recorded);
 
     // Brings the filter up to date (pulling the store) and flushes it
     auto syncAndFlush = [&] {
@@ -122,6 +126,7 @@ int main() {
 
     // 6. A view nobody uses is released by collect()
     evens->removeListener(&rec);
+    evens->removeInterests(recorded);
     std::weak_ptr<Filter<From<Store>>::View> weak = evens;
     evens.reset();
     ledger.collect();

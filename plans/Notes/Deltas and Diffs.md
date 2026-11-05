@@ -12,3 +12,5 @@ For slots, "one past the largest index that may be taken" (`slotCount`) is used 
 A Delta may carry several forms of the same changes (for example index spans and bit masks). New forms are added next to the existing ones, never instead of them, and only when some listener gets faster with them; each listener reads whichever form is cheapest for its work.
 
 `SlotDelta` carries both forms: index spans, and bits (`touched`, `touchedWords`, `changes`). `touchedWords` lists the non-zero touched words, so word-level work costs O(changed words) even on huge views. The word form pays off from about 2 changes per touched word; `SlotFilterView` picks its path per delta by that ratio.
+
+A source fills only the delta members its listeners asked for (`addInterests` with `SlotInterest` flags); the others are empty. Interests are counted per flag, so a member is built while at least one listener wants it. A listener must ask for every member it reads.

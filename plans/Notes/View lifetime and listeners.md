@@ -5,3 +5,4 @@ A broadcasting view stores raw pointers to its listeners, and a listener refers 
 - A dependent view owns its source through a `shared_ptr`, so the source outlives it, and the dependent view removes itself as a listener in its destructor.
 - Adding or removing listeners from inside `onDelta` is UB; it invalidates the broadcast loop.
 - External listeners must be removed before the view or the listener dies.
+- Listener interests are counted separately from listeners: add them around `addListener` and remove them with `removeListener`, the same number of times. A leaked interest only wastes delta assembly; a missing one leaves members empty.

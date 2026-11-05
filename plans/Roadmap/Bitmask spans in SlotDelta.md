@@ -1,4 +1,7 @@
 # [Optimization] Bitmask spans in SlotDelta
+---
+done: true
+---
 Store slot flags in a word-addressable bit storage, and give `SlotDelta` bit members next to its index spans, so listeners can process changes a whole word (64 slots) at a time. The index spans stay; listeners use the bit members only where they are faster.
 
 `SlotDelta` gains three members:

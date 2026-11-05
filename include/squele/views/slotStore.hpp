@@ -104,13 +104,14 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
     }
 
     /**
-     * Sends the changes since the last flush to listeners; does nothing when
-     * there are none.
+     * Sends the changes since the last flush to listeners, filling only the
+     * delta members in `interests()`; does nothing when there are none.
      */
     void flush() {
         if (m_diff.empty())
             return;
-        this->broadcast(m_diff.delta(activeCount(), slotCount()));
+        this->broadcast(
+            m_diff.delta(activeCount(), slotCount(), this->interests()));
         m_diff.clear();
     }
 
