@@ -6,6 +6,7 @@
 #include "squele/views/slotStore.hpp"
 
 #include <array>
+#include <bit>
 #include <cassert>
 #include <cstdio>
 #include <map>
@@ -30,6 +31,18 @@ template <class V> struct Mirror {
             model[it.index()] = *it;
     }
     void onDelta(const typename V::Delta &d) {
+        // Swaps first, in order; the other members describe what follows
+        for (const auto &[a, b] : d.swapped) {
+            auto na = model.extract(a), nb = model.extract(b);
+            if (na) {
+                na.key() = b;
+                model.insert(std::move(na));
+            }
+            if (nb) {
+                nb.key() = a;
+                model.insert(std::move(nb));
+            }
+        }
         std::set<Index> seen;
         auto once = [&](Index i) { assert(seen.insert(i).second); };
         for (Index i : d.deleted) {
@@ -62,7 +75,6 @@ template <class V> struct Mirror {
         for (Index w : d.touchedWords) {
             assert(words.insert(w).second);
             const SlotWordChange &c = d.words[w];
-            assert(c.touched != 0);
             // Every plane is a subset of touched; same of existed & exists
             assert(!((c.existed | c.exists) & ~c.touched));
             assert(!(c.same & ~(c.existed & c.exists)));
@@ -159,7 +171,10 @@ void checkFolding(std::mt19937 &rng) {
             f(whole);
             f(part);
         };
-        if (!taken[i]) {
+        if (const Index j = Index(rng() % n); rng() % 4 == 0 && i != j) {
+            both([&](auto &d) { d.swap(i, j); });
+            taken.swap(taken[i], taken[j]);
+        } else if (!taken[i]) {
             both([&](auto &d) { d.create(i); });
             taken[i] = true;
         } else if (rng() % 2) {
@@ -178,12 +193,21 @@ void checkFolding(std::mt19937 &rng) {
             const auto a = whole.delta(0, n, SlotInterest::ALL);
             const auto b = folded.delta(0, n, SlotInterest::ALL);
             assert(a.touchedCount == b.touchedCount);
-            assert(a.touchedWords.size() == b.touchedWords.size());
-            for (Index w : a.touchedWords) {
-                const SlotWordChange &x = a.words[w], &y = b.words[w];
+            // Swaps may leave listed words empty, so the lists may differ;
+            // the blocks may not
+            auto block = [](std::span<const SlotWordChange> ws, std::size_t w) {
+                return w < ws.size() ? ws[w] : SlotWordChange{};
+            };
+            for (std::size_t w = 0; w < n / bitWordBits + 1; ++w) {
+                const SlotWordChange x = block(a.words, w),
+                                     y = block(b.words, w);
                 assert(x.touched == y.touched && x.existed == y.existed &&
                        x.exists == y.exists && x.same == y.same);
             }
+            assert(a.swapped.size() == b.swapped.size());
+            for (std::size_t k = 0; k < a.swapped.size(); ++k)
+                assert(a.swapped[k].a == b.swapped[k].a &&
+                       a.swapped[k].b == b.swapped[k].b);
             whole.clear();
             folded.clear();
         }
@@ -206,6 +230,144 @@ template <class T> void checkStableItems(int n) {
         assert(&store[typename SlotStore<T>::Index(i)] == refs[i]);
 }
 
+/**
+ * A test-only original that swaps items (no real view does yet): a fixed
+ * number of slots, each toggled between free and taken by hand
+ */
+class SwapSource : public Broadcaster<SlotDelta<Index>> {
+  public:
+    using Item = int;
+    using Index = ::Index;
+    using Delta = SlotDelta<Index>;
+    using Query = From<SwapSource>;
+    using Iterator = SlotIterator<SwapSource>;
+
+    explicit SwapSource(Index n) : m_items(n) { m_taken.resize(n); }
+
+    void toggle(Index i, int v) {
+        record();
+        if (isTaken(i)) {
+            m_taken.reset(i);
+            m_diff.erase(i);
+        } else {
+            m_taken.set(i);
+            m_items[i] = v;
+            m_diff.create(i);
+        }
+    }
+    void modify(Index i, int v) {
+        assert(isTaken(i));
+        record();
+        m_items[i] = v;
+        m_diff.modify(i);
+    }
+    void swap(Index a, Index b) {
+        record();
+        m_diff.swap(a, b);
+        std::swap(m_items[a], m_items[b]);
+        const bool ta = isTaken(a), tb = isTaken(b);
+        ta ? m_taken.set(b) : m_taken.reset(b);
+        tb ? m_taken.set(a) : m_taken.reset(a);
+    }
+    void flush() {
+        if (m_diff.empty())
+            return;
+        broadcast(m_diff.delta(activeCount(), slotCount(), interests()));
+        m_diff.clear();
+    }
+
+    const int &operator[](Index i) const { return m_items[i]; }
+    bool isTaken(Index i) const { return i < slotCount() && m_taken.test(i); }
+    BitSpan takenBits() const { return m_taken; }
+    Index activeCount() const {
+        Index n = 0;
+        for (BitWord w : takenBits().words())
+            n += Index(std::popcount(w));
+        return n;
+    }
+    Index slotCount() const { return Index(m_items.size()); }
+    Iterator begin() const { return {this, 0}; }
+    Iterator end() const { return {this, slotCount()}; }
+
+  private:
+    void record() {
+        if (m_diff.empty())
+            broadcastDirty();
+    }
+
+    std::vector<int> m_items;
+    BitVector m_taken;
+    SlotDiff<Index> m_diff;
+};
+
+// Counts its calls, to check that swaps never re-check an item
+struct CountedEven {
+    static inline long calls = 0;
+    bool operator()(const int &x) const { return ++calls, x % 2 == 0; }
+};
+
+/**
+ * Random toggles, modifications and swaps through two nested filters (one
+ * read every round, one only now and then, so it folds swaps); rounds of
+ * swaps alone must not call the predicate
+ */
+void checkSwaps(std::mt19937 &rng) {
+    static_assert(Original<SwapSource> && SlotViewable<SwapSource>);
+    constexpr Index n = 500;
+    auto src = std::make_shared<SwapSource>(n);
+    for (Index i = 0; i < n; i += 2)
+        src->toggle(i, int(rng() % 100));
+    Ledger ledger;
+    auto evens = ledger.get(Filter{From{src}, CountedEven{}});
+    auto bigEvens = ledger.get(Filter{Filter{From{src}, CountedEven{}}, isBig});
+    Mirror<SwapSource> ms(*src);
+    Mirror<decltype(evens)::element_type> me(*evens);
+    Mirror<decltype(bigEvens)::element_type> mb(*bigEvens);
+    src->addListener(&ms);
+    evens->addListener(&me);
+    bigEvens->addListener(&mb);
+    src->addInterests(SlotInterest::ALL);
+    evens->addInterests(SlotInterest::ALL);
+    bigEvens->addInterests(SlotInterest::ALL);
+
+    for (int round = 0; round < 2000; ++round) {
+        const bool swapsOnly = rng() % 3 == 0;
+        const long calls = CountedEven::calls;
+        // Bulk rounds spread changes over many words, for the word path
+        const int ops = int(rng() % (round % 7 ? 8 : 400));
+        for (int k = 0; k < ops; ++k) {
+            const Index i = Index(rng() % n), j = Index(rng() % n);
+            const int op = swapsOnly ? 0 : int(rng() % 3);
+            if (op == 0) {
+                if (i != j)
+                    src->swap(i, j);
+            } else if (op == 1 || !src->isTaken(i))
+                src->toggle(i, int(rng() % 100));
+            else
+                src->modify(i, int(rng() % 100));
+        }
+        pull(*evens);
+        me.check();
+        if (rng() % 4 == 0) {
+            pull(*bigEvens);
+            mb.check();
+            for (auto &[i, v] : ms.model)
+                assert(mb.model.count(i) == (v % 2 == 0 && isBig(v)));
+        }
+        if (swapsOnly)
+            assert(CountedEven::calls == calls);
+        ms.check();
+        for (auto &[i, v] : ms.model)
+            assert(me.model.count(i) == (v % 2 == 0));
+    }
+    src->removeListener(&ms);
+    evens->removeListener(&me);
+    bigEvens->removeListener(&mb);
+    src->removeInterests(SlotInterest::ALL);
+    evens->removeInterests(SlotInterest::ALL);
+    bigEvens->removeInterests(SlotInterest::ALL);
+}
+
 struct Big {
     char bytes[100000]; // larger than a chunk: one cell per chunk
 };
@@ -217,6 +379,7 @@ int main() {
     checkCoalescing();
     std::mt19937 rng(42);
     checkFolding(rng);
+    checkSwaps(rng);
     auto store = std::make_shared<Store>();
     Ledger ledger;
     auto evens = ledger.get(Filter{From{store}, isEven});

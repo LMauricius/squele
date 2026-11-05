@@ -4,6 +4,7 @@
 
 #include "squele/bits/slotBits.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <concepts>
@@ -138,7 +139,7 @@ inline constexpr Mask CREATED = 1 << 0;
 inline constexpr Mask DELETED = 1 << 1;
 inline constexpr Mask REPLACED = 1 << 2;
 inline constexpr Mask MODIFIED = 1 << 3;
-inline constexpr Mask MOVED = 1 << 4;
+inline constexpr Mask SWAPPED = 1 << 4;
 inline constexpr Mask WORDS = 1 << 5;
 inline constexpr Mask TOUCHED_WORDS = 1 << 6;
 inline constexpr Mask SPARSE_SPANS = 1 << 7;
@@ -153,6 +154,8 @@ inline constexpr Mask ALL = 0xFF;
  * - index spans (`created`, ...), for per-index work on a few changes;
  * - word blocks (`words`, `touchedWords`), for word-level work such as
  *   updating per-slot flags 64 at a time.
+ * Both forms describe the changes after the `swapped` ones: a listener first
+ * applies the swaps, in order, to its state at the last flush.
  * @note Every index appears in at most one span. Spans are *unordered*; a
  * consumer that needs index order walks the touched words instead.
  * @note A member is filled only while some listener has its `SlotInterest`
@@ -163,11 +166,12 @@ template <std::integral TIndexT> struct SlotDelta {
     using Interests = SlotInterest::Mask;
 
     /**
-     * An index that moved; references to its item stay valid
+     * Two indices whose items (or free slots) traded places; either may be
+     * free. An item keeps its value, but not its address
      */
-    struct Move {
-        IndexT from;
-        IndexT to;
+    struct Swap {
+        IndexT a;
+        IndexT b;
     };
 
     /**
@@ -216,9 +220,11 @@ template <std::integral TIndexT> struct SlotDelta {
     std::span<const IndexT> modified;
 
     /**
-     * Moved indices. Always empty until a source moves items
+     * Swaps in the order they happened, applied before every other change.
+     * Not counted in `touchedCount`: a swapped item that did not change
+     * otherwise is untouched at its new index
      */
-    std::span<const Move> moved;
+    std::span<const Swap> swapped;
 
     /**
      * The changes per 64 slots, indexed by word (`index / bitWordBits`).
@@ -230,6 +236,8 @@ template <std::integral TIndexT> struct SlotDelta {
     /**
      * Indices of the `words` with at least one touched bit; unordered, each
      * once. Visiting only these keeps word-level work O(changed words).
+     * @note It may also list words whose touched bits were all swapped away;
+     * their blocks are all zero.
      */
     std::span<const IndexT> touchedWords;
 };
@@ -263,6 +271,23 @@ template <std::integral TIndexT> class SlotDiff {
     void modify(IndexT i) { modifyWord(word(i), bit(i)); }
 
     /**
+     * Records that the items (or free slots) at the distinct indices `a` and
+     * `b` traded places: the changes recorded for each follow its item, and
+     * `{a, b}` is appended to the swaps
+     * @note Strong exception guarantee.
+     */
+    void swap(IndexT a, IndexT b) {
+        assert(a != b);
+        // Every allocating step first; growing adds untouched blocks only
+        reserve(std::max(word(a), word(b)) + 1);
+        const bool first = m_swaps.empty();
+        m_swaps.push_back({a, b});
+        if (first)
+            markListed();
+        swapBits(a, b);
+    }
+
+    /**
      * Word-level `create`: records the indices `w * bitWordBits + b` for
      * every set bit `b` of `m`. The same holds for `eraseWord`, `modifyWord`.
      * @note Strong exception guarantee, as for every recording call.
@@ -280,13 +305,18 @@ template <std::integral TIndexT> class SlotDiff {
      * before the first word is folded.
      */
     void fold(const DeltaT &d) {
-        if (m_words.size() < d.words.size())
-            m_words.resize(d.words.size());
-        // A word is listed at most once, so the list never outgrows the
-        // blocks; reserving their capacity (which grows geometrically) keeps
-        // this amortized O(1)
-        if (m_touchedWords.capacity() < m_words.size())
-            m_touchedWords.reserve(m_words.capacity());
+        std::size_t words = d.words.size();
+        for (const auto &s : d.swapped)
+            words = std::max({words, word(s.a) + 1, word(s.b) + 1});
+        reserve(words);
+        const bool first = m_swaps.empty() && !d.swapped.empty();
+        m_swaps.insert(m_swaps.end(), d.swapped.begin(), d.swapped.end());
+        if (first)
+            markListed();
+        // The later swaps permute the changes recorded here, before the later
+        // changes (which start after them) are folded
+        for (const auto &s : d.swapped)
+            swapBits(s.a, s.b);
         for (IndexT w : d.touchedWords) {
             const auto at = static_cast<std::size_t>(w);
             const SlotWordChange &later = d.words[at];
@@ -311,6 +341,8 @@ template <std::integral TIndexT> class SlotDiff {
             d.words = m_words;
         if (wanted & SI::TOUCHED_WORDS)
             d.touchedWords = m_touchedWords;
+        if (wanted & SI::SWAPPED)
+            d.swapped = m_swaps;
 
         // SPARSE_SPANS is every span while the delta is sparse (same rule as
         // DeltaT::sparse(), on the diff's own words)
@@ -348,6 +380,9 @@ template <std::integral TIndexT> class SlotDiff {
         for (IndexT w : m_touchedWords) {
             const auto at = static_cast<std::size_t>(w);
             const SlotWordChange &c = m_words[at];
+            // Emptied by swaps: the lone-change path below needs a set bit
+            if (!c.touched)
+                continue;
             const std::size_t base = at * bitWordBits;
             const BitWord created = c.created() & kc,
                           deleted = c.deleted() & kd,
@@ -390,16 +425,20 @@ template <std::integral TIndexT> class SlotDiff {
     void clear() {
         for (IndexT w : m_touchedWords)
             m_words[static_cast<std::size_t>(w)] = {};
+        if (!m_swaps.empty())
+            for (IndexT w : m_touchedWords)
+                m_listed.reset(static_cast<std::size_t>(w));
         m_touchedWords.clear();
+        m_swaps.clear();
         m_touchedCount = 0;
     }
 
     /**
      * @returns true when nothing was recorded since the last clear()
      * @note A create followed by an erase of the same index still counts as
-     * recorded; its delta is just empty
+     * recorded; its delta is just empty. So does a swap
      */
-    bool empty() const { return m_touchedWords.empty(); }
+    bool empty() const { return m_touchedWords.empty() && m_swaps.empty(); }
 
   private:
     static std::size_t word(IndexT i) {
@@ -433,18 +472,85 @@ template <std::integral TIndexT> class SlotDiff {
     }
 
     /**
+     * Grows the blocks to at least `words` and reserves the word list for
+     * all of them, so listing a word afterwards never allocates. Growing adds
+     * untouched blocks only, so it changes nothing visible.
+     */
+    void reserve(std::size_t words) {
+        if (words > m_words.size()) {
+            m_words.resize(words);
+            m_listed.resize(words);
+        }
+        // A word is listed at most once, so the list never outgrows the
+        // blocks; reserving their capacity (which grows geometrically) keeps
+        // this amortized O(1)
+        if (m_touchedWords.capacity() < m_words.size())
+            m_touchedWords.reserve(m_words.capacity());
+    }
+
+    /**
+     * Lists word `w` unless it is listed already
+     * @warning Needs `reserve()` to cover `w` (not checked).
+     */
+    void list(std::size_t w) noexcept {
+        // Before the first swap since clear(), listed means touched, so
+        // the caller's untouched word is unlisted and m_listed stays unused
+        // (it costs about 10% on sparse recording)
+        if (!m_swaps.empty()) {
+            if (m_listed.test(w))
+                return;
+            m_listed.set(w);
+        }
+        m_touchedWords.push_back(static_cast<IndexT>(w));
+    }
+
+    /**
+     * Fills `m_listed` from the word list, on the first swap since clear()
+     */
+    void markListed() noexcept {
+        for (IndexT w : m_touchedWords)
+            m_listed.set(static_cast<std::size_t>(w));
+    }
+
+    /**
+     * Swaps the four plane bits of `a` and `b`; lists the word that gains a
+     * touched bit. The touched count is unchanged (bits only move)
+     * @warning Needs `reserve()` to cover both words (not checked).
+     */
+    void swapBits(IndexT a, IndexT b) noexcept {
+        SlotWordChange &ca = m_words[word(a)], &cb = m_words[word(b)];
+        const auto sa = static_cast<std::size_t>(a) % bitWordBits;
+        const auto sb = static_cast<std::size_t>(b) % bitWordBits;
+        // XOR swap of one bit per plane; ca and cb may be the same block, so
+        // the difference is read before either write
+        for (BitWord SlotWordChange::*p :
+             {&SlotWordChange::touched, &SlotWordChange::existed,
+              &SlotWordChange::exists, &SlotWordChange::same}) {
+            const BitWord x = ((ca.*p >> sa) ^ (cb.*p >> sb)) & 1;
+            ca.*p ^= x << sa;
+            cb.*p ^= x << sb;
+        }
+        // A word emptied by the swap stays listed (m_listed prevents listing
+        // it twice); clear() and the consumers skip it
+        if (ca.touched)
+            list(word(a));
+        if (cb.touched)
+            list(word(b));
+    }
+
+    /**
      * Prepares word `w` for recording the slots `m`: runs every allocating
      * step first (strong exception guarantee), then counts the newly touched
      * slots.
      * @returns the word's block, for the caller to record into
      */
     SlotWordChange &touch(std::size_t w, BitWord m) {
-        // Growing adds untouched blocks only, so it changes nothing visible
         if (w >= m_words.size())
-            m_words.resize(w + 1);
+            reserve(w + 1);
         SlotWordChange &c = m_words[w];
+        // Only an untouched word can be unlisted (or emptied by swaps)
         if (!c.touched && m)
-            m_touchedWords.push_back(static_cast<IndexT>(w));
+            list(w);
         const BitWord fresh = m & ~c.touched;
         // One fresh bit is the common case; it skips the popcount (a libgcc
         // call without -mpopcnt)
@@ -458,8 +564,13 @@ template <std::integral TIndexT> class SlotDiff {
     // non-zero. Aligned so a block never splits a cache line
     std::vector<SlotWordChange, AlignedAllocator<SlotWordChange, bitWordAlign>>
         m_words;
-    // Indices of the touched m_words; each appears once
+    // Indices of the touched m_words; each appears once, which m_listed
+    // (one bit per block, kept only while there are swaps) keeps true after
+    // swaps empty a listed word
     std::vector<IndexT> m_touchedWords;
+    BitVector m_listed;
+    // Every swap since the last clear, in order
+    std::vector<typename DeltaT::Swap> m_swaps;
     // The number of touched bits
     std::size_t m_touchedCount = 0;
     // Output buffers that delta() spans over (two spans each, from both

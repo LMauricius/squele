@@ -152,7 +152,8 @@ template <Viewable TSourceT, class TPredT> class FilterView {
  * once per source change. A view that is not read folds the deltas into a
  * pending diff instead, and re-checks the net changes on its next `sync()`. Its
  * pass flags and its own diff are updated a word (64 slots) at a time, from
- * the delta's word blocks.
+ * the delta's word blocks. A swap in the source swaps the pass flags without
+ * re-checking, and is forwarded unless both slots fail.
  */
 template <Viewable TSourceT, class TPredT>
 class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
@@ -245,10 +246,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
             if (!m_pending.empty()) {
                 // The source was just pulled, so it is consistent with the
                 // pending changes; only slots that still hold an item are read
-                namespace SI = SlotInterest;
-                apply(m_pending.delta(0, m_pendingSlotCount,
-                                      SI::SPARSE_SPANS | SI::WORDS |
-                                          SI::TOUCHED_WORDS));
+                apply(m_pending.delta(0, m_pendingSlotCount, sourceInterests));
                 m_pending.clear();
             }
             m_dirty = false;
@@ -298,6 +296,9 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     void apply(const Delta &d) noexcept {
         if (static_cast<std::size_t>(d.slotCount) > m_pass.size())
             m_pass.resize(static_cast<std::size_t>(d.slotCount));
+        // Swaps first: the other changes start from the swapped state
+        if (!d.swapped.empty()) [[unlikely]]
+            swapAll(d.swapped);
         // Per index over the spans while sparse (the source fills them only
         // then, see SPARSE_SPANS); word level otherwise
         if (d.sparse()) {
@@ -342,14 +343,44 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
         }
     }
 
-    // Read from the source's deltas: the spans by the per-index path (sparse
+    // Read from the source's deltas: the swaps first, the spans by the
+    // per-index path (sparse
     // deltas only), the word blocks by the word path. Fixed, since `m_pass`
     // needs every change whatever this view's listeners want
     static constexpr typename Delta::Interests sourceInterests =
         SlotInterest::SPARSE_SPANS | SlotInterest::WORDS |
-        SlotInterest::TOUCHED_WORDS;
+        SlotInterest::TOUCHED_WORDS | SlotInterest::SWAPPED;
 
     bool check(Index i) const { return m_pred((*m_source)[i]); }
+
+    /**
+     * Applies the source's swaps in order. Kept out of line: inlined into
+     * `apply()`, it slowed sparse deltas without swaps by about 5%
+     */
+    [[gnu::noinline]] void swapAll(std::span<const typename Delta::Swap> s) {
+        for (const auto &[a, b] : s)
+            swap(a, b);
+    }
+
+    /**
+     * Follows a source swap of `a` and `b`: the pass flags trade places with
+     * their items, so the predicate does not run
+     */
+    void swap(Index a, Index b) {
+        const auto at = static_cast<std::size_t>(a);
+        const auto bt = static_cast<std::size_t>(b);
+        const bool pa = m_pass.test(at), pb = m_pass.test(bt);
+        // Two failing slots are both free here, so the swap changes nothing
+        // this view holds or reports (its diff stays valid as it is)
+        if (!pa && !pb)
+            return;
+        if (pa != pb) {
+            pa ? m_pass.reset(at) : m_pass.set(at);
+            pb ? m_pass.reset(bt) : m_pass.set(bt);
+        }
+        if (this->hasListeners())
+            m_diff.swap(a, b);
+    }
 
     /**
      * Records the transition of index `i`:
