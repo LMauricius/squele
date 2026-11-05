@@ -17,7 +17,7 @@ Blocks:
 # [Feature] A planned capability, written by the maintainer; its subtasks are Tasks
 ---
 $meta:
-  color: '#d9ff00'
+  color: '#eeff00'
 ---
 
 Blocks:
@@ -29,7 +29,7 @@ Useful:
 # [Optimization] A possible later optimization: a short description linking Notes and Hazards; its subtasks are Tasks (concrete steps and open ideas); kept in `Optimizations/`
 ---
 $meta:
-  color: '#00c8a0'
+  color: '#00c835'
 ---
 
 Addresses:
