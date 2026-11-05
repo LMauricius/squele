@@ -2,13 +2,16 @@
 #ifndef H_INCLUDED_SQUELE_BITS_SLOTITERATOR
 #define H_INCLUDED_SQUELE_BITS_SLOTITERATOR
 
+#include "squele/bits/slotBits.hpp"
+
+#include <bit>
 #include <cstddef>
 
 namespace squele {
 
 /**
  * Forward iterator over the items of a slot-based view, skipping free indices.
- * Shared by all slot views, so each one only provides `isTaken()`,
+ * Shared by all slot views, so each one only provides `takenBits()`,
  * `operator[]` and `slotCount()`.
  * @note Invalidated by any change to the view.
  */
@@ -25,13 +28,23 @@ template <class TViewT> class SlotIterator {
      * @param p_view the iterated view
      * @param i the first index to consider; free indices after it are skipped
      */
-    SlotIterator(const ViewT *p_view, IndexT i)
-        : m_view(p_view), m_index(skipFree(i)) {}
+    SlotIterator(const ViewT *p_view, IndexT i) : m_view(p_view) {
+        seek(static_cast<std::size_t>(i));
+    }
 
     const value_type &operator*() const { return (*m_view)[m_index]; }
 
     SlotIterator &operator++() {
-        m_index = skipFree(static_cast<IndexT>(m_index + 1));
+        // Only `m_word &= m_word - 1` carries over between steps; the index
+        // is derived from it, so dense iteration is not latency-bound
+        m_word &= m_word - 1;
+        const auto base =
+            static_cast<std::size_t>(m_index) & ~(bitWordBits - 1);
+        if (m_word)
+            m_index = static_cast<IndexT>(
+                base + static_cast<std::size_t>(std::countr_zero(m_word)));
+        else
+            seek(base + bitWordBits);
         return *this;
     }
 
@@ -55,17 +68,22 @@ template <class TViewT> class SlotIterator {
 
   private:
     /**
-     * @returns the first taken index >= i, or slotCount() if none
+     * Moves to the first taken index >= i, or slotCount() if none; skips 64
+     * free indices per step. Loads that index's word, minus the bits below it.
      */
-    IndexT skipFree(IndexT i) const {
-        const IndexT end = m_view->slotCount();
-        while (i < end && !m_view->isTaken(i))
-            ++i;
-        return i;
+    void seek(std::size_t i) {
+        const BitSpan taken = m_view->takenBits();
+        const std::size_t at = taken.nextSet(i);
+        m_index = static_cast<IndexT>(at);
+        m_word = at < taken.size() ? taken.words()[at / bitWordBits] &
+                                         (~BitWord{0} << (at % bitWordBits))
+                                   : 0;
     }
 
     const ViewT *m_view = nullptr;
     IndexT m_index = 0;
+    // The taken bits of m_index's word, at and above m_index
+    BitWord m_word = 0;
 };
 
 } // namespace squele

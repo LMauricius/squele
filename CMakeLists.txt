@@ -27,3 +27,6 @@ add_subdirectory(examples)
 # Add the tests: ctest --test-dir build
 enable_testing()
 add_subdirectory(tests)
+
+# Add the benchmarks
+add_subdirectory(benchmarks)

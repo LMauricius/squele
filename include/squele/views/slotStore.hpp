@@ -40,9 +40,8 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
 
     ~SlotStore() {
         // Cells cannot tell whether they hold an item; the pool can
-        for (std::size_t i = 0; i < m_cells.size(); ++i)
-            if (m_pool.isTaken(static_cast<Index>(i)))
-                m_cells[i].destroy();
+        for (auto it = begin(); it != end(); ++it)
+            m_cells[it.index()].destroy();
     }
 
     /**
@@ -122,6 +121,7 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
     const Item &operator[](Index i) const { return m_cells[i].get(); }
 
     bool isTaken(Index i) const { return m_pool.isTaken(i); }
+    BitSpan takenBits() const { return m_pool.takenBits(); }
     Index activeCount() const { return m_pool.activeCount(); }
     Index slotCount() const { return m_pool.slotCount(); }
 

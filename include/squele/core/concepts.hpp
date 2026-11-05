@@ -115,6 +115,8 @@ concept Original =
 /**
  * A view whose items are accessed by sparse, reusable indices.
  * - `isTaken(i)`: whether index `i` holds an item.
+ * - `takenBits()`: the same flags as a `BitSpan` (one bit per index, length
+ *   `slotCount()`), for word-level scans.
  * - `operator[](i)`: the item at a taken index.
  * - `activeCount()`: the number of taken indices.
  * - `slotCount()`: one past the largest index that may be taken.
@@ -128,6 +130,7 @@ concept SlotViewable =
     requires(const T &t, typename T::Index i) {
         typename T::Item;
         { t.isTaken(i) } -> std::same_as<bool>;
+        { t.takenBits() } -> std::same_as<BitSpan>;
         { t[i] } -> std::same_as<const typename T::Item &>;
         { t.activeCount() } -> std::same_as<typename T::Index>;
         { t.slotCount() } -> std::same_as<typename T::Index>;

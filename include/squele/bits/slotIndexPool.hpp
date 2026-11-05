@@ -2,6 +2,8 @@
 #ifndef H_INCLUDED_SQUELE_BITS_SLOTINDEXPOOL
 #define H_INCLUDED_SQUELE_BITS_SLOTINDEXPOOL
 
+#include "squele/bits/slotBits.hpp"
+
 #include <cassert>
 #include <concepts>
 #include <cstddef>
@@ -27,7 +29,7 @@ template <std::integral TIndexT> class SlotIndexPool {
     IndexT acquire() {
         if (m_freeCount > 0) {
             const IndexT i = m_free[--m_freeCount];
-            m_taken[static_cast<std::size_t>(i)] = true;
+            m_taken.set(static_cast<std::size_t>(i));
             return i;
         }
         const std::size_t i = m_taken.size();
@@ -47,7 +49,7 @@ template <std::integral TIndexT> class SlotIndexPool {
      */
     void release(IndexT i) noexcept {
         assert(isTaken(i));
-        m_taken[static_cast<std::size_t>(i)] = false;
+        m_taken.reset(static_cast<std::size_t>(i));
         m_free[m_freeCount++] = i;
     }
 
@@ -56,8 +58,13 @@ template <std::integral TIndexT> class SlotIndexPool {
      */
     bool isTaken(IndexT i) const {
         const auto at = static_cast<std::size_t>(i);
-        return at < m_taken.size() && m_taken[at];
+        return at < m_taken.size() && m_taken.test(at);
     }
+
+    /**
+     * @returns the taken flags, one bit per index
+     */
+    BitSpan takenBits() const { return m_taken; }
 
     /**
      * @returns the number of taken indices
@@ -72,7 +79,7 @@ template <std::integral TIndexT> class SlotIndexPool {
     IndexT slotCount() const { return static_cast<IndexT>(m_taken.size()); }
 
   private:
-    std::vector<bool> m_taken;
+    BitVector m_taken;
     // Free stack. Sized ahead to m_taken.size(), so release() never allocates;
     // only the first m_freeCount entries are meaningful
     std::vector<IndexT> m_free;

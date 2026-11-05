@@ -1,5 +1,6 @@
 # Build system
 build
+build-rel
 
 # Editor
 .vscode

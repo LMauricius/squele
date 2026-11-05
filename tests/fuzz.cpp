@@ -50,7 +50,37 @@ template <class V> struct Mirror {
             model[i] = view[i];
         }
         assert(d.activeCount == model.size());
+        checkBits(d, seen);
         check();
+    }
+    // The bit form of a delta must describe exactly the index spans
+    static void checkBits(const typename V::Delta &d,
+                          const std::set<Index> &inSpans) {
+        std::set<Index> touched, words;
+        for (Index w : d.touchedWords) {
+            assert(words.insert(w).second);
+            assert(d.touched.words()[w] != 0);
+        }
+        for (std::size_t i = 0; i < d.touched.size(); ++i) {
+            if (!d.touched.test(i))
+                continue;
+            touched.insert(Index(i));
+            assert(words.count(Index(i / bitWordBits)));
+            assert(d.changes[i] != SlotChange::untouched);
+            assert(inSpans.count(Index(i)) ==
+                   (d.changes[i] != SlotChange::nothing));
+        }
+        for (Index i : inSpans)
+            assert(touched.count(i));
+        for (Index i : d.replaced)
+            assert(d.changes[i] == SlotChange::replaced);
+        checkPadding(d.touched);
+    }
+    // Bits past size() must stay zero; word-level code relies on it
+    static void checkPadding(BitSpan bits) {
+        for (std::size_t i = bits.size(); i < bits.words().size() * bitWordBits;
+             ++i)
+            assert(!((bits.words()[i / bitWordBits] >> (i % bitWordBits)) & 1));
     }
     void check() const {
         std::map<Index, int> actual;
@@ -58,6 +88,11 @@ template <class V> struct Mirror {
             actual[it.index()] = *it;
         assert(actual == model);
         assert(view.activeCount() == model.size());
+        const BitSpan taken = view.takenBits();
+        assert(taken.size() == view.slotCount());
+        for (Index i = 0; i < view.slotCount(); ++i)
+            assert(taken.test(i) == view.isTaken(i));
+        checkPadding(taken);
     }
 };
 
@@ -83,7 +118,11 @@ int main() {
     evens->addListener(&me);
     bigEvens->addListener(&mb);
 
+    // A bulk start spreads indices over several words, so both onDelta paths
+    // (per index and per word) run
     std::vector<Index> live{0, 1};
+    for (int k = 0; k < 300; ++k)
+        live.push_back(store->emplace(int(rng() % 100)));
     for (int round = 0; round < 2000; ++round) {
         const int ops = int(rng() % 8);
         for (int k = 0; k < ops; ++k) {

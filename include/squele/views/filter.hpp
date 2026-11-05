@@ -4,19 +4,21 @@
 
 #include "squele/bits/hash.hpp"
 #include "squele/bits/pull.hpp"
+#include "squele/bits/slotBits.hpp"
 #include "squele/bits/slotIterator.hpp"
 #include "squele/components/broadcaster.hpp"
 #include "squele/core/concepts.hpp"
 #include "squele/core/ledger.hpp"
 #include "squele/deltas/slot.hpp"
 
+#include <bit>
 #include <cassert>
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <span>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace squele {
 
@@ -96,7 +98,9 @@ template <Viewable TSourceT> class FilterView {
  * `SlotViewable` itself, it can be filtered again.
  *
  * It updates eagerly: `onDelta` re-checks only the changed indices while the
- * source is consistent, so the predicate runs once per source change.
+ * source is consistent, so the predicate runs once per source change. Its
+ * pass flags are updated a word (64 slots) at a time, from the delta's
+ * touched bits.
  */
 template <Viewable TSourceT>
 class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
@@ -123,7 +127,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
         m_pass.resize(static_cast<std::size_t>(m_source->slotCount()));
         for (auto it = m_source->begin(); it != m_source->end(); ++it) {
             if (m_pred(*it)) {
-                m_pass[static_cast<std::size_t>(it.index())] = true;
+                m_pass.set(static_cast<std::size_t>(it.index()));
                 ++m_activeCount;
             }
         }
@@ -140,14 +144,50 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     void onDelta(const Delta &d) noexcept {
         if (static_cast<std::size_t>(d.slotCount) > m_pass.size())
             m_pass.resize(static_cast<std::size_t>(d.slotCount));
-        for (Index i : d.deleted)
-            update(i, false, false);
-        for (Index i : d.created)
-            update(i, check(i), false);
-        for (Index i : d.replaced)
-            update(i, check(i), true);
-        for (Index i : d.modified)
-            update(i, check(i), false);
+        // Per index: word-level updates win only from about 2 changes per
+        // touched word (measured with benchmarks/slot.cpp)
+        const std::size_t changed = d.created.size() + d.deleted.size() +
+                                    d.replaced.size() + d.modified.size();
+        if (changed < 2 * d.touchedWords.size()) {
+            for (Index i : d.deleted)
+                update(i, false, false);
+            for (Index i : d.created)
+                update(i, check(i), false);
+            for (Index i : d.replaced)
+                update(i, check(i), true);
+            for (Index i : d.modified)
+                update(i, check(i), false);
+            return;
+        }
+
+        // Word level: 64 pass flags per step, predicate only where needed
+        const std::span<BitWord> pass = m_pass.words();
+        const std::span<const BitWord> touched = d.touched.words();
+        const std::span<const BitWord> taken = m_source->takenBits().words();
+        const bool record = this->hasListeners();
+        for (Index w : d.touchedWords) {
+            const auto at = static_cast<std::size_t>(w);
+            const std::size_t base = at * bitWordBits;
+            const BitWord t = touched[at];
+            const BitWord old = pass[at];
+
+            // New pass bits: untouched bits keep theirs; touched ones pass
+            // when the source holds them and the predicate accepts them
+            BitWord next = old & ~t;
+            for (BitWord alive = t & taken[at]; alive; alive &= alive - 1) {
+                const int b = std::countr_zero(alive);
+                if (check(static_cast<Index>(base + b)))
+                    next |= BitWord{1} << b;
+            }
+            pass[at] = next;
+            // Subtract first: old bits are counted, so this never wraps
+            m_activeCount -= static_cast<Index>(std::popcount(old));
+            m_activeCount += static_cast<Index>(std::popcount(next));
+
+            // Without listeners nothing is recorded, so flush() stays a no-op
+            if (record)
+                recordWord(d, base, t & (old | next), old, next);
+        }
     }
 
     /**
@@ -191,8 +231,10 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
 
     bool isTaken(Index i) const {
         const auto at = static_cast<std::size_t>(i);
-        return at < m_pass.size() && m_pass[at];
+        return at < m_pass.size() && m_pass.test(at);
     }
+
+    BitSpan takenBits() const { return m_pass; }
 
     Index activeCount() const { return m_activeCount; }
     Index slotCount() const { return static_cast<Index>(m_pass.size()); }
@@ -211,13 +253,15 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
      */
     void update(Index i, bool passes, bool replaced) {
         const auto at = static_cast<std::size_t>(i);
-        const bool passed = m_pass[at];
+        const bool passed = m_pass.test(at);
         if (passed != passes) {
-            m_pass[at] = passes;
-            if (passes)
+            if (passes) {
+                m_pass.set(at);
                 ++m_activeCount;
-            else
+            } else {
+                m_pass.reset(at);
                 --m_activeCount;
+            }
         }
         // Without listeners nothing is recorded, so flush() stays a no-op
         if (!this->hasListeners())
@@ -236,9 +280,36 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
         }
     }
 
+    /**
+     * Word-level `update()`: records the transitions of the indices in `bits`
+     * (touched, and passing before or after) of the word starting at index
+     * `base`, given the word's old and new pass bits.
+     */
+    void recordWord(const Delta &d, std::size_t base, BitWord bits, BitWord old,
+                    BitWord next) {
+        for (; bits; bits &= bits - 1) {
+            const int b = std::countr_zero(bits);
+            const auto i = static_cast<Index>(base + b);
+            const bool passed = (old >> b) & 1;
+            const bool passes = (next >> b) & 1;
+            if (passed && passes) {
+                if (d.changes[base + b] == SlotChange::replaced) {
+                    m_diff.erase(i);
+                    m_diff.create(i);
+                } else {
+                    m_diff.modify(i);
+                }
+            } else if (passed) {
+                m_diff.erase(i);
+            } else {
+                m_diff.create(i);
+            }
+        }
+    }
+
     std::shared_ptr<SourceT> m_source; // owned, so it outlives this listener
     typename Query::Predicate m_pred;
-    std::vector<bool> m_pass; // per source index: taken and passed
+    BitVector m_pass; // per source index: taken and passed
     Index m_activeCount = 0;
     SlotDiff<Index> m_diff;
     bool m_dirty = false;

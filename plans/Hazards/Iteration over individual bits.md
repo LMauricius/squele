@@ -1,4 +1,7 @@
 # [Hazard] Iteration over individual bits
+---
+done: true
+---
 Slot views keep their "taken" flags in `std::vector<bool>` (`SlotIndexPool::m_taken`, `SlotFilterView::m_pass`) and read them one bit at a time. `SlotIterator::skipFree` calls `isTaken(i)` for every index, free or taken, and each call does a bounds check plus a shift and mask through the `std::vector<bool>` proxy. `SlotFilterView::onDelta` reads and writes one pass bit per changed index, and updates `m_activeCount` one transition at a time.
 
 Useful:
