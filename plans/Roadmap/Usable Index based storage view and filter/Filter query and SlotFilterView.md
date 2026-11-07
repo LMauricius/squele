@@ -8,7 +8,7 @@ Add `Filter<TSourceQ>`, the declared `FilterView` and the implemented `SlotFilte
 
 `FilterView` is declared only; instantiating it fails with a `static_assert` until a non-slot source exists.
 
-`SlotFilterView` is `Dependent` on its source and uses nothing of the source besides `Listening` and the `SlotViewable` members. It reuses the source's indices: index `i` is taken when the source has it taken and the predicate passed. It stores a `std::vector<bool>` of pass flags and a pass counter (its `activeCount`), and reads items from the source, so it owns no item copies.
+`SlotFilterView` is `Dependent` on its source and uses nothing of the source besides `Listening` and the `SlotViewable` members. It reuses the source's indices: index `i` is taken when the source has it taken and the predicate passed. It stores a `std::vector<bool>` of pass flags and a pass counter (its `count`), and reads items from the source, so it owns no item copies.
 
 It updates eagerly: the source is consistent while it flushes, so `onDelta` re-checks the delta's indices right away and records the transitions in the view's own `SlotDiff`. There is no pending diff and no copy of the source delta; the predicate runs once per source change, whoever pulls the source.
 

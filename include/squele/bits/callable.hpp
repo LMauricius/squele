@@ -20,7 +20,7 @@ namespace squele {
  * - any other type, by its `operator==` and `std::hash`.
  */
 template <class C>
-concept QueryCallable =
+concept KeyCallable =
     std::copyable<C> && (std::is_pointer_v<C> || std::is_empty_v<C> ||
                          (std::equality_comparable<C> && requires(const C &c) {
                              {
@@ -29,10 +29,10 @@ concept QueryCallable =
                          }));
 
 /**
- * Compares two query callables by the rules of `QueryCallable`, so every
+ * Compares two key callables by the rules of `KeyCallable`, so every
  * query compares its callables the same way
  */
-template <QueryCallable C> bool callableEqual(const C &a, const C &b) {
+template <KeyCallable C> bool callableEqual(const C &a, const C &b) {
     if constexpr (std::is_empty_v<C>)
         return true;
     else
@@ -40,11 +40,11 @@ template <QueryCallable C> bool callableEqual(const C &a, const C &b) {
 }
 
 /**
- * Mixes a query callable into the hash `seed` by the rules of
- * `QueryCallable`; an empty callable leaves it as it is, since its type is
+ * Mixes a key callable into the hash `seed` by the rules of
+ * `KeyCallable`; an empty callable leaves it as it is, since its type is
  * part of the query type
  */
-template <QueryCallable C>
+template <KeyCallable C>
 std::size_t combineCallableHash(std::size_t seed, const C &c) {
     if constexpr (std::is_empty_v<C>)
         return seed;

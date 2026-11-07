@@ -7,7 +7,7 @@ Rename `bits/indexTable.hpp` to `bits/slotIndexPool.hpp` and finish it as the in
 - State: `std::vector<bool>` of taken flags plus a `std::vector<IndexT>` stack of freed indices. The stack is sized ahead to `slotCount()` (with a separate count of free entries), so `release(i)` never allocates and is `noexcept`; error paths of the owner rely on it.
 - `acquire()`: pops the free stack, or appends a new index when it is empty. O(1) amortized. When it appends, the returned index equals the old `slotCount()`, so the owner knows to grow its storage.
 - `release(i)`: clears the flag and pushes `i`. Releasing a free index is UB (asserted).
-- `isTaken(i)`, `activeCount()`, `slotCount()` (replacing `maxIndex()`).
+- `isTaken(i)`, `count()`, `slotCount()` (replacing `maxIndex()`).
 - Running out of `IndexT` values is asserted in `acquire()`.
 - Add the missing `<concepts>` include.
 

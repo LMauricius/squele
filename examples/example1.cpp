@@ -43,12 +43,12 @@ static_assert(sizeof(Filter<From<Store>, IsPositive>) == sizeof(From<Store>));
  */
 struct Recorder {
     int deltas = 0;
-    Index activeCount = 0;
+    Index count = 0;
     Indices created, deleted, replaced, modified;
 
     void onDelta(const Store::Delta &d) {
         ++deltas;
-        activeCount = d.activeCount;
+        count = d.count;
         created = sorted(d.created);
         deleted = sorted(d.deleted);
         replaced = sorted(d.replaced);
@@ -102,7 +102,7 @@ int main() {
     const Index b = store->emplace(2);
     const Index c = store->emplace(4);
     syncAndFlush();
-    assert(rec.deltas == 1 && rec.activeCount == 2);
+    assert(rec.deltas == 1 && rec.count == 2);
     assert((rec.created == Indices{b, c}));
     assert((items(*evens) == std::vector{2, 4}));
     positives->sync();
@@ -138,7 +138,7 @@ int main() {
     // A view not read for a while catches up on its next sync()
     positives->sync();
     assert((items(*positives) == std::vector{10, 3, 12}));
-    assert(store->activeCount() == 3 && store->slotCount() == 3);
+    assert(store->count() == 3 && store->slotCount() == 3);
 
     // 6. A view nobody uses is released by collect()
     evens->removeListener(&rec);

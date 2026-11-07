@@ -68,7 +68,7 @@ template <class V> struct Mirror {
             assert(model.count(i));
             model[i] = view[i];
         }
-        assert(d.activeCount == model.size());
+        assert(d.count == model.size());
         checkBits(d, seen);
         check();
     }
@@ -117,7 +117,7 @@ template <class V> struct Mirror {
         for (auto it = view.begin(); it != view.end(); ++it)
             actual[it.index()] = *it;
         assert(actual == model);
-        assert(view.activeCount() == model.size());
+        assert(view.count() == model.size());
         const BitSpan taken = view.takenBits();
         assert(taken.size() == view.slotCount());
         for (Index i = 0; i < view.slotCount(); ++i)
@@ -281,14 +281,14 @@ class SwapSource : public Broadcaster<SlotDelta<Index>> {
     void flush() {
         if (m_diff.empty())
             return;
-        broadcast(m_diff.delta(activeCount(), slotCount(), interests()));
+        broadcast(m_diff.delta(count(), slotCount(), interests()));
         m_diff.clear();
     }
 
     const int &operator[](Index i) const { return m_items[i]; }
     bool isTaken(Index i) const { return i < slotCount() && m_taken.test(i); }
     BitSpan takenBits() const { return m_taken; }
-    Index activeCount() const {
+    Index count() const {
         Index n = 0;
         for (BitWord w : takenBits().words())
             n += Index(std::popcount(w));
@@ -471,7 +471,7 @@ int main() {
     store->emplace(2);
     store->emplace(3);
     pull(*bigEvens);
-    assert(evens->activeCount() == 1 && bigEvens->activeCount() == 0);
+    assert(evens->count() == 1 && bigEvens->count() == 0);
 
     Mirror<Store> ms(*store);
     Mirror<decltype(evens)::element_type> me(*evens);

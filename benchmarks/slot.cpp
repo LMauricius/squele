@@ -101,9 +101,8 @@ void suite(const char *kind, Index keep) {
     auto none = [] {};
     bench("iterate store", none, [&] { g_sink = sum(*store); });
     bench("iterate filter", none, [&] { g_sink = sum(*evens); });
-    bench("construct filter", none, [&] {
-        g_sink = Evens{From{store}, isEven}.result(ledger)->activeCount();
-    });
+    bench("construct filter", none,
+          [&] { g_sink = Evens{From{store}, isEven}.result(ledger)->count(); });
 
     // Small delta: a few scattered modifications through two filter levels
     auto touch = [&](std::size_t n) {
@@ -151,7 +150,7 @@ void suite(const char *kind, Index keep) {
     evens.reset();
     ledger.collect();
     bench("construct filter, functor", none, [&] {
-        g_sink = EvensF{From{store}, IsEven{}}.result(ledger)->activeCount();
+        g_sink = EvensF{From{store}, IsEven{}}.result(ledger)->count();
     });
     auto bigsF = ledger.get(BigsF{EvensF{From{store}, IsEven{}}, IsBig{}});
     bench(
@@ -195,8 +194,7 @@ void largeSuite() {
     bench(
         "construct filter", [] {},
         [&] {
-            g_sink =
-                Filter{From{store}, isEvenLarge}.result(ledger)->activeCount();
+            g_sink = Filter{From{store}, isEvenLarge}.result(ledger)->count();
         });
 }
 

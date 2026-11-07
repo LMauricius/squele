@@ -9,7 +9,7 @@ Store slot flags in a word-addressable bit storage, and give `SlotDelta` bit mem
 - `touchedWords`: the indices of the `touched` words that have a set bit (unordered, each once). A listener visits only these words, so a sparse delta costs O(changed words), not O(slotCount / 64).
 - `changes`: the net change kind per slot, read only at touched indices. It is the per-slot array `SlotDiff` already keeps, so it costs nothing to expose.
 
-A touched mask speeds up any view that keeps per-slot derived bits. A filter recomputes its pass word as `(pass & ~touched) | passed(touched & sourceTaken)`, and gets its transitions as `created = new & ~old`, `deleted = old & ~new`, `activeCount += popcount(new) - popcount(old)`. Planned set views (union or intersection of views over one source) would recompute `a & b` or `a | b` per touched word with no per-index work at all. Walking a touched word with `std::countr_zero` also yields its indices in ascending order, which ordered consumers can use without sorting.
+A touched mask speeds up any view that keeps per-slot derived bits. A filter recomputes its pass word as `(pass & ~touched) | passed(touched & sourceTaken)`, and gets its transitions as `created = new & ~old`, `deleted = old & ~new`, `count += popcount(new) - popcount(old)`. Planned set views (union or intersection of views over one source) would recompute `a & b` or `a | b` per touched word with no per-index work at all. Walking a touched word with `std::countr_zero` also yields its indices in ascending order, which ordered consumers can use without sorting.
 
 The bit storage keeps its words 64-byte aligned (one cache line) and padded to a multiple of 8 words, with every padding bit zero. Bulk loops then need no scalar tail, and `popcount` over whole words stays exact.
 
@@ -75,7 +75,7 @@ Blocks:
 ---
 done: true
 ---
-Below about 2 changes per touched word, `onDelta` keeps the per-index path over the spans (measured faster there). Otherwise it visits `touchedWords`. For each word it calls the predicate only for `touched & sourceTaken`, builds the new pass word, and derives created and deleted bits and the `m_activeCount` change with bit operations. A kept index (passed before and after) is recorded as replaced when `changes` says so, else as modified.
+Below about 2 changes per touched word, `onDelta` keeps the per-index path over the spans (measured faster there). Otherwise it visits `touchedWords`. For each word it calls the predicate only for `touched & sourceTaken`, builds the new pass word, and derives created and deleted bits and the `m_count` change with bit operations. A kept index (passed before and after) is recorded as replaced when `changes` says so, else as modified.
 
 Blocks:
 - [Task] Bitmask results and docs

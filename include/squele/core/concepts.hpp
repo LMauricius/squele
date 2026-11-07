@@ -122,14 +122,14 @@ concept Original =
  * A view whose items can be listed in some order.
  * - `T::Item`: the item type.
  * - `begin()`/`end()`: iterate the items as `const Item &`.
- * - `activeCount()`: the number of items.
+ * - `count()`: the number of items.
  */
 template <class T>
 concept ListViewable = Viewable<T> && requires(const T &t) {
     typename T::Item;
     { *t.begin() } -> std::same_as<const typename T::Item &>;
     { t.begin() == t.end() } -> std::convertible_to<bool>;
-    { t.activeCount() } -> std::integral;
+    { t.count() } -> std::integral;
 };
 
 /**
@@ -138,7 +138,7 @@ concept ListViewable = Viewable<T> && requires(const T &t) {
  * - `takenBits()`: the same flags as a `BitSpan` (one bit per index, length
  *   `slotCount()`), for word-level scans.
  * - `operator[](i)`: the item at a taken index.
- * - `activeCount()`: the number of taken indices.
+ * - `count()`: the number of taken indices.
  * - `slotCount()`: one past the largest index that may be taken.
  * - `begin()`/`end()`: iterate items of taken indices only; `it.index()` is
  *   the current index.
@@ -152,7 +152,7 @@ concept SlotViewable =
         { t.isTaken(i) } -> std::same_as<bool>;
         { t.takenBits() } -> std::same_as<BitSpan>;
         { t[i] } -> std::same_as<const typename T::Item &>;
-        { t.activeCount() } -> std::same_as<typename T::Index>;
+        { t.count() } -> std::same_as<typename T::Index>;
         { t.slotCount() } -> std::same_as<typename T::Index>;
         { *t.begin() } -> std::same_as<const typename T::Item &>;
         { t.begin().index() } -> std::same_as<typename T::Index>;
@@ -161,7 +161,7 @@ concept SlotViewable =
 
 /**
  * A slot view whose items are sorted by `T::Compare`.
- * - Dense: `slotCount() == activeCount()`, and every index below it is
+ * - Dense: `slotCount() == count()`, and every index below it is
  *   taken.
  * - Sorted: the item at `i` is never less than the item at `i - 1` under
  *   `compare()`; the order of equal items is unspecified.

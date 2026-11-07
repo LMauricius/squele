@@ -6,4 +6,4 @@ Slot-based views store items in `SlotCell<T>`: raw aligned storage without a "ta
 - Freed indices are reused last freed first, in O(1).
 - If an item's constructor throws, the acquired index is released again and no change is recorded.
 - Slot flags (taken, passed) are stored in `BitVector` (`bits/slotBits.hpp`), not `std::vector<bool>`, because word-level code needs the words. Words are 64-byte aligned and padded to whole cache lines, and every bit past `size()` is zero; code that writes words directly must keep that invariant. Change bookkeeping (`SlotDiff`) uses its own blocks of four words per 64 slots (see [Note] Deltas and Diffs), half a byte per slot.
-- `SlotViewable::takenBits()` exposes the taken flags, so `SlotIterator` skips 64 free slots per step and costs O(slotCount / 64 + activeCount).
+- `SlotViewable::takenBits()` exposes the taken flags, so `SlotIterator` skips 64 free slots per step and costs O(slotCount / 64 + count).

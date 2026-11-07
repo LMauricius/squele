@@ -127,7 +127,7 @@ struct SlotWordChange {
  * Flags naming the members of `SlotDelta` a listener reads, one bit per
  * member. A listener adds them to its source (`addInterests`), and the source
  * fills only the members someone asked for; the rest stay empty.
- * `activeCount`, `slotCount`, `touchedCount` and `relocated` are always
+ * `count`, `slotCount`, `touchedCount` and `relocated` are always
  * filled.
  * `SPARSE_SPANS` asks for the four index spans only while the delta is
  * `sparse()`: a listener that handles dense deltas through the bit members
@@ -179,7 +179,7 @@ template <std::integral TIndexT> struct SlotDelta {
     /**
      * The number of *taken* indices in the source
      */
-    IndexT activeCount;
+    IndexT count;
 
     /**
      * One past the largest index that may be taken
@@ -345,12 +345,11 @@ template <std::integral TIndexT> class SlotDiff {
      * are filled, the rest are empty
      * @note The returned spans are valid until this diff changes
      */
-    DeltaT delta(IndexT activeCount, IndexT slotCount,
-                 SlotInterest::Mask wanted) {
+    DeltaT delta(IndexT count, IndexT slotCount, SlotInterest::Mask wanted) {
         namespace SI = SlotInterest;
         // The word members view the diff's own state, so they cost nothing
         DeltaT d{};
-        d.activeCount = activeCount;
+        d.count = count;
         d.slotCount = slotCount;
         d.touchedCount = static_cast<IndexT>(m_touchedCount);
         d.relocated = m_relocated;

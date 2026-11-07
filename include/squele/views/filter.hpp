@@ -24,12 +24,12 @@
 namespace squele {
 
 /**
- * A `QueryCallable` that accepts a `const TItemT &` and returns whether the
+ * A `KeyCallable` that accepts a `const TItemT &` and returns whether the
  * item passes
  */
 template <class P, class TItemT>
 concept FilterPredicate =
-    QueryCallable<P> && std::predicate<const P &, const TItemT &>;
+    KeyCallable<P> && std::predicate<const P &, const TItemT &>;
 
 namespace detail {
 
@@ -179,7 +179,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
             }
             pass[at] = next;
             if (next)
-                m_activeCount += static_cast<Index>(std::popcount(next));
+                m_count += static_cast<Index>(std::popcount(next));
         }
         m_source->addInterests(sourceInterests);
         m_source->addListener(this);
@@ -248,8 +248,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     void flush() {
         if (m_diff.empty())
             return;
-        this->broadcast(
-            m_diff.delta(m_activeCount, slotCount(), this->interests()));
+        this->broadcast(m_diff.delta(m_count, slotCount(), this->interests()));
         m_diff.clear();
     }
 
@@ -266,7 +265,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
 
     BitSpan takenBits() const { return m_pass; }
 
-    Index activeCount() const { return m_activeCount; }
+    Index count() const { return m_count; }
     Index slotCount() const { return static_cast<Index>(m_pass.size()); }
 
     Iterator begin() const { return {this, 0}; }
@@ -322,8 +321,8 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
             }
             pass[at] = next;
             // Subtract first: old bits are counted, so this never wraps
-            m_activeCount -= static_cast<Index>(std::popcount(old));
-            m_activeCount += static_cast<Index>(std::popcount(next));
+            m_count -= static_cast<Index>(std::popcount(old));
+            m_count += static_cast<Index>(std::popcount(next));
 
             // Without listeners nothing is recorded, so flush() stays a no-op
             if (record)
@@ -382,10 +381,10 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
         if (passed != passes) {
             if (passes) {
                 m_pass.set(at);
-                ++m_activeCount;
+                ++m_count;
             } else {
                 m_pass.reset(at);
-                --m_activeCount;
+                --m_count;
             }
         }
         // Without listeners nothing is recorded, so flush() stays a no-op
@@ -427,7 +426,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     std::shared_ptr<SourceT> m_source; // owned, so it outlives this listener
     [[no_unique_address]] typename Query::Predicate m_pred;
     BitVector m_pass; // per source index: taken and passed
-    Index m_activeCount = 0;
+    Index m_count = 0;
     SlotDiff<Index> m_diff;
     // Source changes not applied yet, and the source's slot count at the
     // last of them

@@ -27,11 +27,11 @@
 namespace squele {
 
 /**
- * A `QueryCallable` that is a strict weak order on `TItemT`
+ * A `KeyCallable` that is a strict weak order on `TItemT`
  */
 template <class C, class TItemT>
 concept SortComparator =
-    QueryCallable<C> &&
+    KeyCallable<C> &&
     std::strict_weak_order<const C &, const TItemT &, const TItemT &>;
 
 namespace detail {
@@ -105,7 +105,7 @@ namespace squele {
 
 /**
  * The view of `Sort`: the source's items in sorted order, at the dense
- * positions `0..activeCount-1`. It owns no item copies: each position holds a
+ * positions `0..count-1`. It owns no item copies: each position holds a
  * pointer to its source item. It is `OrderedViewable` (so `SlotViewable`),
  * and reports its changes as `SlotDelta`s.
  *
@@ -187,21 +187,21 @@ class ArraySortView
      * there are none
      */
     void flush() {
-        // m_diff.delta(activeCount(), slotCount(), interests()), clear
+        // m_diff.delta(count(), slotCount(), interests()), clear
     }
 
     /**
      * @returns the item at position `i`
-     * @warning Reading a position past `activeCount()` is UB (not checked).
+     * @warning Reading a position past `count()` is UB (not checked).
      */
     const Item &operator[](Index i) const {
         return *m_order[static_cast<std::size_t>(i)].p_item;
     }
 
-    bool isTaken(Index i) const { return i < activeCount(); }
+    bool isTaken(Index i) const { return i < count(); }
     BitSpan takenBits() const { return m_taken; }
-    Index activeCount() const { return static_cast<Index>(m_order.size()); }
-    Index slotCount() const { return activeCount(); }
+    Index count() const { return static_cast<Index>(m_order.size()); }
+    Index slotCount() const { return count(); }
     const Compare &compare() const { return m_cmp; }
 
     Iterator begin() const { return {this, 0}; }
@@ -228,7 +228,7 @@ class ArraySortView
         SlotInterest::MODIFIED | SlotInterest::SWAPPED | SlotInterest::WORDS |
         SlotInterest::TOUCHED_WORDS;
 
-    // Slot path: a delta touching more than activeCount / bulkDivisor items
+    // Slot path: a delta touching more than count / bulkDivisor items
     // re-sorts fully (placeholder until measured)
     static constexpr std::size_t bulkDivisor = 4;
 
@@ -270,7 +270,7 @@ class ArraySortView
         // 6. Batch: the taken-out modified entries plus created and replaced
         //    ones ({&src[i], i}); the new ones have rank npos
         // 7. compact() from the first taken-out position p0
-        // 8. Bulk (batch above activeCount / bulkDivisor): append the batch
+        // 8. Bulk (batch above count / bulkDivisor): append the batch
         //    and std::sort everything, p = 0. Else std::sort the batch and
         //    mergeSortedBack(), p = min(p0, its result)
         // 9. recordReorder(p, oldCount) with listeners
@@ -293,7 +293,7 @@ class ArraySortView
      * Slot path: takes the deleted and replaced items out (null pointer as
      * the mark), records their old positions erased, and sets their ranks
      * to npos
-     * @returns the first position taken out (activeCount() if none)
+     * @returns the first position taken out (count() if none)
      */
     Index takeOut(const typename SourceT::Delta &d) { return 0; }
 
@@ -316,7 +316,7 @@ class ArraySortView
 
     /**
      * Slot path: removes the taken-out entries from `p0` on, keeping the
-     * order of the rest. O(activeCount - p0)
+     * order of the rest. O(count - p0)
      */
     void compact(Index p0) {}
 
@@ -345,7 +345,7 @@ class ArraySortView
     std::shared_ptr<SourceT> m_source; // owned, so it outlives this listener
     [[no_unique_address]] Compare m_cmp;
     std::vector<Entry> m_order; // per position
-    BitVector m_taken;          // the first activeCount() bits
+    BitVector m_taken;          // the first count() bits
     SlotDiff<Index> m_diff;
     bool m_dirty = false;
     bool m_readSinceDelta = true;
