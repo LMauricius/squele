@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace squele {
 
@@ -119,31 +120,63 @@ concept Original =
     Viewable<T> && !Syncable<T> && std::same_as<typename T::Query, From<T>>;
 
 /**
+ * A view whose items can be listed in some order.
+ * - `T::Item`: the item type.
+ * - `begin()`/`end()`: iterate the items as `const Item &`.
+ * - `count()`: the number of items.
+ */
+template <class T>
+concept ListViewable =
+    Viewable<T> &&
+    requires(const T &t, decltype(std::declval<const T &>().begin()) it) {
+        typename T::Item;
+        { *it } -> std::same_as<const typename T::Item &>;
+        ++it;
+        { it == t.end() } -> std::convertible_to<bool>;
+        { t.count() } -> std::integral;
+    };
+
+/**
  * A view whose items are accessed by sparse, reusable indices.
  * - `isTaken(i)`: whether index `i` holds an item.
  * - `takenBits()`: the same flags as a `BitSpan` (one bit per index, length
  *   `slotCount()`), for word-level scans.
  * - `operator[](i)`: the item at a taken index.
- * - `activeCount()`: the number of taken indices.
+ * - `count()`: the number of taken indices.
  * - `slotCount()`: one past the largest index that may be taken.
  * - `begin()`/`end()`: iterate items of taken indices only; `it.index()` is
  *   the current index.
  */
 template <class T>
 concept SlotViewable =
-    Viewable<T> && std::integral<typename T::Index> &&
+    ListViewable<T> && std::integral<typename T::Index> &&
     std::same_as<typename T::Delta, SlotDelta<typename T::Index>> &&
     requires(const T &t, typename T::Index i) {
         typename T::Item;
         { t.isTaken(i) } -> std::same_as<bool>;
         { t.takenBits() } -> std::same_as<BitSpan>;
         { t[i] } -> std::same_as<const typename T::Item &>;
-        { t.activeCount() } -> std::same_as<typename T::Index>;
+        { t.count() } -> std::same_as<typename T::Index>;
         { t.slotCount() } -> std::same_as<typename T::Index>;
         { *t.begin() } -> std::same_as<const typename T::Item &>;
         { t.begin().index() } -> std::same_as<typename T::Index>;
         { t.begin() == t.end() } -> std::same_as<bool>;
     };
+
+/**
+ * A slot view whose items are sorted by `T::Compare`.
+ * - Dense: `slotCount() == count()`, and every index below it is
+ *   taken.
+ * - Sorted: the item at `i` is never less than the item at `i - 1` under
+ *   `compare()`; the order of equal items is unspecified.
+ * - `compare()`: the strict weak order the items are sorted by.
+ * @note Density and order are contracts, not checked.
+ */
+template <class T>
+concept OrderedViewable = SlotViewable<T> && requires(const T &t) {
+    typename T::Compare;
+    { t.compare() } -> std::same_as<const typename T::Compare &>;
+};
 
 } // namespace squele
 

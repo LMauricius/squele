@@ -1,12 +1,17 @@
 // Fuzz test: random store mutations checked against a naive model, through
 // nested filters pulled from random chain levels; deltas are replayed into the
 // model. Asserts are the checks; build without NDEBUG.
+#include "squele/bits/order.hpp"
 #include "squele/core/ledger.hpp"
-#include "squele/views/filter.hpp"
+#include "squele/queries/filter.hpp"
+#include "squele/queries/sort.hpp"
 #include "squele/views/slotStore.hpp"
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <random>
@@ -21,15 +26,37 @@ using Index = Store::Index;
 bool isEven(const int &x) { return x % 2 == 0; }
 bool isBig(const int &x) { return x > 50; }
 
-// Replays deltas into a model set; checks it matches the view after each flush
+// Replays deltas into a model set; checks it matches the view after each
+// flush, and that item addresses change only where the delta allows it
 template <class V> struct Mirror {
     const V &view;
-    std::map<Index, int> model; // index -> value snapshot
+    std::map<Index, int> model;          // index -> value snapshot
+    std::map<Index, const void *> addrs; // index -> item address
+    bool relocated = false;              // seen in a delta since last reset
     explicit Mirror(const V &v) : view(v) {
-        for (auto it = v.begin(); it != v.end(); ++it)
+        for (auto it = v.begin(); it != v.end(); ++it) {
             model[it.index()] = *it;
+            addrs[it.index()] = &*it;
+        }
     }
     void onDelta(const typename V::Delta &d) {
+        relocated |= d.relocated;
+        // Items that may have a new address: swapped, created, replaced
+        std::set<Index> moved;
+        // Swaps first, in order; the other members describe what follows
+        for (const auto &[a, b] : d.swapped) {
+            auto na = model.extract(a), nb = model.extract(b);
+            if (na) {
+                na.key() = b;
+                model.insert(std::move(na));
+            }
+            if (nb) {
+                nb.key() = a;
+                model.insert(std::move(nb));
+            }
+            moved.insert(a);
+            moved.insert(b);
+        }
         std::set<Index> seen;
         auto once = [&](Index i) { assert(seen.insert(i).second); };
         for (Index i : d.deleted) {
@@ -40,18 +67,28 @@ template <class V> struct Mirror {
             once(i);
             assert(!model.count(i));
             model[i] = view[i];
+            moved.insert(i);
         }
         for (Index i : d.replaced) {
             once(i);
             assert(model.count(i));
             model[i] = view[i];
+            moved.insert(i);
         }
         for (Index i : d.modified) {
             once(i);
             assert(model.count(i));
             model[i] = view[i];
         }
-        assert(d.activeCount == model.size());
+        assert(d.count == model.size());
+        // Untouched and modified items keep their addresses unless relocated
+        std::map<Index, const void *> next;
+        for (const auto &[i, v] : model) {
+            next[i] = &view[i];
+            if (!d.relocated && !moved.count(i))
+                assert(addrs.at(i) == next[i]);
+        }
+        addrs.swap(next);
         checkBits(d, seen);
         check();
     }
@@ -62,7 +99,6 @@ template <class V> struct Mirror {
         for (Index w : d.touchedWords) {
             assert(words.insert(w).second);
             const SlotWordChange &c = d.words[w];
-            assert(c.touched != 0);
             // Every plane is a subset of touched; same of existed & exists
             assert(!((c.existed | c.exists) & ~c.touched));
             assert(!(c.same & ~(c.existed & c.exists)));
@@ -101,7 +137,7 @@ template <class V> struct Mirror {
         for (auto it = view.begin(); it != view.end(); ++it)
             actual[it.index()] = *it;
         assert(actual == model);
-        assert(view.activeCount() == model.size());
+        assert(view.count() == model.size());
         const BitSpan taken = view.takenBits();
         assert(taken.size() == view.slotCount());
         for (Index i = 0; i < view.slotCount(); ++i)
@@ -159,7 +195,10 @@ void checkFolding(std::mt19937 &rng) {
             f(whole);
             f(part);
         };
-        if (!taken[i]) {
+        if (const Index j = Index(rng() % n); rng() % 4 == 0 && i != j) {
+            both([&](auto &d) { d.swap(i, j); });
+            taken.swap(taken[i], taken[j]);
+        } else if (!taken[i]) {
             both([&](auto &d) { d.create(i); });
             taken[i] = true;
         } else if (rng() % 2) {
@@ -178,12 +217,21 @@ void checkFolding(std::mt19937 &rng) {
             const auto a = whole.delta(0, n, SlotInterest::ALL);
             const auto b = folded.delta(0, n, SlotInterest::ALL);
             assert(a.touchedCount == b.touchedCount);
-            assert(a.touchedWords.size() == b.touchedWords.size());
-            for (Index w : a.touchedWords) {
-                const SlotWordChange &x = a.words[w], &y = b.words[w];
+            // Swaps may leave listed words empty, so the lists may differ;
+            // the blocks may not
+            auto block = [](std::span<const SlotWordChange> ws, std::size_t w) {
+                return w < ws.size() ? ws[w] : SlotWordChange{};
+            };
+            for (std::size_t w = 0; w < n / bitWordBits + 1; ++w) {
+                const SlotWordChange x = block(a.words, w),
+                                     y = block(b.words, w);
                 assert(x.touched == y.touched && x.existed == y.existed &&
                        x.exists == y.exists && x.same == y.same);
             }
+            assert(a.swapped.size() == b.swapped.size());
+            for (std::size_t k = 0; k < a.swapped.size(); ++k)
+                assert(a.swapped[k].a == b.swapped[k].a &&
+                       a.swapped[k].b == b.swapped[k].b);
             whole.clear();
             folded.clear();
         }
@@ -206,6 +254,488 @@ template <class T> void checkStableItems(int n) {
         assert(&store[typename SlotStore<T>::Index(i)] == refs[i]);
 }
 
+/**
+ * A test-only original that swaps items (no real view does yet): a fixed
+ * number of slots, each toggled between free and taken by hand
+ */
+class SwapSource : public Broadcaster<SlotDelta<Index>> {
+  public:
+    using Item = int;
+    using Index = ::Index;
+    using Delta = SlotDelta<Index>;
+    using Query = From<SwapSource>;
+    using Iterator = SlotIterator<SwapSource>;
+
+    explicit SwapSource(Index n) : m_items(n) { m_taken.resize(n); }
+
+    void toggle(Index i, int v) {
+        record();
+        if (isTaken(i)) {
+            m_taken.reset(i);
+            m_diff.erase(i);
+        } else {
+            m_taken.set(i);
+            m_items[i] = v;
+            m_diff.create(i);
+        }
+    }
+    void modify(Index i, int v) {
+        assert(isTaken(i));
+        record();
+        m_items[i] = v;
+        m_diff.modify(i);
+    }
+    // Items do not really move; a relocation only tests forwarding
+    void relocate() {
+        record();
+        m_diff.relocate();
+    }
+    void swap(Index a, Index b) {
+        record();
+        m_diff.swap(a, b);
+        std::swap(m_items[a], m_items[b]);
+        const bool ta = isTaken(a), tb = isTaken(b);
+        ta ? m_taken.set(b) : m_taken.reset(b);
+        tb ? m_taken.set(a) : m_taken.reset(a);
+    }
+    void flush() {
+        if (m_diff.empty())
+            return;
+        broadcast(m_diff.delta(count(), slotCount(), interests()));
+        m_diff.clear();
+    }
+
+    const int &operator[](Index i) const { return m_items[i]; }
+    bool isTaken(Index i) const { return i < slotCount() && m_taken.test(i); }
+    BitSpan takenBits() const { return m_taken; }
+    Index count() const {
+        Index n = 0;
+        for (BitWord w : takenBits().words())
+            n += Index(std::popcount(w));
+        return n;
+    }
+    Index slotCount() const { return Index(m_items.size()); }
+    Iterator begin() const { return {this, 0}; }
+    Iterator end() const { return {this, slotCount()}; }
+
+  private:
+    void record() {
+        if (m_diff.empty())
+            broadcastDirty();
+    }
+
+    std::vector<int> m_items;
+    BitVector m_taken;
+    SlotDiff<Index> m_diff;
+};
+
+// Counts its calls, to check that swaps never re-check an item
+struct CountedEven {
+    static inline long calls = 0;
+    bool operator()(const int &x) const { return ++calls, x % 2 == 0; }
+};
+
+/**
+ * Random toggles, modifications and swaps through two nested filters (one
+ * read every round, one only now and then, so it folds swaps); rounds of
+ * swaps alone must not call the predicate. Random relocations must reach
+ * both filters' listeners exactly when they happened since their last read
+ */
+void checkSwaps(std::mt19937 &rng) {
+    static_assert(Original<SwapSource> && SlotViewable<SwapSource>);
+    constexpr Index n = 500;
+    auto src = std::make_shared<SwapSource>(n);
+    for (Index i = 0; i < n; i += 2)
+        src->toggle(i, int(rng() % 100));
+    Ledger ledger;
+    auto evens = ledger.get(Filter{From{src}, CountedEven{}});
+    auto bigEvens = ledger.get(Filter{Filter{From{src}, CountedEven{}}, isBig});
+    Mirror<SwapSource> ms(*src);
+    Mirror<decltype(evens)::element_type> me(*evens);
+    Mirror<decltype(bigEvens)::element_type> mb(*bigEvens);
+    src->addListener(&ms);
+    evens->addListener(&me);
+    bigEvens->addListener(&mb);
+    src->addInterests(SlotInterest::ALL);
+    evens->addInterests(SlotInterest::ALL);
+    bigEvens->addInterests(SlotInterest::ALL);
+
+    bool relocatedForBig = false;
+    for (int round = 0; round < 2000; ++round) {
+        const bool swapsOnly = rng() % 3 == 0;
+        const bool relocated = rng() % 8 == 0;
+        if (relocated)
+            src->relocate();
+        relocatedForBig |= relocated;
+        const long calls = CountedEven::calls;
+        // Bulk rounds spread changes over many words, for the word path
+        const int ops = int(rng() % (round % 7 ? 8 : 400));
+        for (int k = 0; k < ops; ++k) {
+            const Index i = Index(rng() % n), j = Index(rng() % n);
+            const int op = swapsOnly ? 0 : int(rng() % 3);
+            if (op == 0) {
+                if (i != j)
+                    src->swap(i, j);
+            } else if (op == 1 || !src->isTaken(i))
+                src->toggle(i, int(rng() % 100));
+            else
+                src->modify(i, int(rng() % 100));
+        }
+        pull(*evens);
+        me.check();
+        assert(me.relocated == relocated);
+        me.relocated = false;
+        if (rng() % 4 == 0) {
+            pull(*bigEvens);
+            mb.check();
+            assert(mb.relocated == relocatedForBig);
+            mb.relocated = relocatedForBig = false;
+            for (auto &[i, v] : ms.model)
+                assert(mb.model.count(i) == (v % 2 == 0 && isBig(v)));
+        }
+        if (swapsOnly)
+            assert(CountedEven::calls == calls);
+        ms.check();
+        for (auto &[i, v] : ms.model)
+            assert(me.model.count(i) == (v % 2 == 0));
+    }
+    src->removeListener(&ms);
+    evens->removeListener(&me);
+    bigEvens->removeListener(&mb);
+    src->removeInterests(SlotInterest::ALL);
+    evens->removeInterests(SlotInterest::ALL);
+    bigEvens->removeInterests(SlotInterest::ALL);
+}
+
+/**
+ * The order tools against the standard algorithms: a merge must give a
+ * sorted multiset of both inputs and keep every element before the position
+ * it reports, and
+ * a permutation applied by swaps must place every element and use at most
+ * one swap per moved element
+ */
+void checkOrderTools(std::mt19937 &rng) {
+    for (int round = 0; round < 2000; ++round) {
+        const std::size_t n = rng() % 40, k = rng() % 10;
+        std::vector<int> out(n + k), batch(k);
+        // Few distinct values, so equal elements are common
+        for (std::size_t i = 0; i < n; ++i)
+            out[i] = int(rng() % 16);
+        for (int &x : batch)
+            x = int(rng() % 16);
+        std::sort(out.begin(), out.begin() + std::ptrdiff_t(n));
+        std::sort(batch.begin(), batch.end());
+        const std::vector<int> before(out.begin(),
+                                      out.begin() + std::ptrdiff_t(n));
+        const std::size_t p = mergeSortedBack(
+            std::span<int>(out), n, std::span<const int>(batch), std::less<>{});
+        std::vector<int> expected = before;
+        expected.insert(expected.end(), batch.begin(), batch.end());
+        std::sort(expected.begin(), expected.end());
+        assert(out == expected);
+        assert(p <= n);
+        for (std::size_t i = 0; i < p; ++i)
+            assert(out[i] == before[i]);
+
+        std::vector<Index> to(n);
+        for (std::size_t i = 0; i < n; ++i)
+            to[i] = Index(i);
+        std::shuffle(to.begin(), to.end(), rng);
+        std::vector<int> items(n), moved(n);
+        for (std::size_t i = 0; i < n; ++i)
+            items[i] = int(i);
+        for (std::size_t i = 0; i < n; ++i)
+            moved[to[i]] = items[i];
+        std::size_t fixed = 0, swaps = 0;
+        for (std::size_t i = 0; i < n; ++i)
+            fixed += to[i] == i;
+        permuteBySwaps(std::span<Index>(to), Index(0), [&](Index a, Index b) {
+            assert(a != b);
+            std::swap(items[a], items[b]);
+            ++swaps;
+        });
+        assert(items == moved);
+        assert(swaps <= n - fixed);
+        for (std::size_t i = 0; i < n; ++i)
+            assert(to[i] == i);
+    }
+}
+
+struct Greater {
+    bool operator()(const int &a, const int &b) const { return a > b; }
+};
+
+// Counts its calls, to check that swaps never compare items
+struct CountedLess {
+    static inline long calls = 0;
+    bool operator()(const int &a, const int &b) const { return ++calls, a < b; }
+};
+
+/**
+ * The `OrderedViewable` contracts: dense, sorted, and holding exactly the
+ * `expected` items
+ */
+template <class V> void checkOrdered(const V &v, std::multiset<int> expected) {
+    assert(v.count() == v.slotCount());
+    std::multiset<int> got;
+    for (Index i = 0; i < v.count(); ++i) {
+        assert(v.isTaken(i));
+        assert(i == 0 || !v.compare()(v[i], v[i - 1]));
+        got.insert(v[i]);
+    }
+    assert(got == expected);
+}
+
+template <class M> std::multiset<int> valuesOf(const M &mirror) {
+    std::multiset<int> out;
+    for (const auto &[i, v] : mirror.model)
+        out.insert(v);
+    return out;
+}
+
+/**
+ * Sort views over a store, over a filter and over another sort (which
+ * follows the swaps of the first), and a filter over a sort; some are read
+ * every round, others now and then, so they defer and fold deltas. Few
+ * distinct values, so equal items are common
+ */
+void checkSortSlot(std::mt19937 &rng) {
+    auto store = std::make_shared<Store>();
+    std::vector<Index> live;
+    // Items before the views, so construction sorts them
+    for (int k = 0; k < 300; ++k)
+        live.push_back(store->emplace(int(rng() % 30)));
+    Ledger ledger;
+    auto up = ledger.get(Sort{From{store}});
+    auto down = ledger.get(Sort{Sort{From{store}}, Greater{}});
+    auto evensUp = ledger.get(Sort{Filter{From{store}, isEven}});
+    auto upEvens = ledger.get(Filter{Sort{From{store}}, isEven});
+    static_assert(OrderedViewable<decltype(up)::element_type> &&
+                  OrderedViewable<decltype(down)::element_type>);
+    assert(ledger.get(Sort{From{store}}) == up);
+
+    Mirror<Store> ms(*store);
+    Mirror<decltype(up)::element_type> mu(*up);
+    Mirror<decltype(down)::element_type> md(*down);
+    Mirror<decltype(evensUp)::element_type> me(*evensUp);
+    Mirror<decltype(upEvens)::element_type> mf(*upEvens);
+    auto listen = [](auto &view, auto &mirror) {
+        view.addListener(&mirror);
+        view.addInterests(SlotInterest::ALL);
+    };
+    auto unlisten = [](auto &view, auto &mirror) {
+        view.removeListener(&mirror);
+        view.removeInterests(SlotInterest::ALL);
+    };
+    listen(*store, ms);
+    listen(*up, mu);
+    listen(*down, md);
+    listen(*evensUp, me);
+    listen(*upEvens, mf);
+
+    for (int round = 0; round < 1500; ++round) {
+        const int ops = int(rng() % (round % 7 ? 6 : 200));
+        for (int k = 0; k < ops; ++k) {
+            const int op = int(rng() % 3);
+            if (op == 0 || live.empty()) {
+                live.push_back(store->emplace(int(rng() % 30)));
+                continue;
+            }
+            const std::size_t at = rng() % live.size();
+            if (op == 1) {
+                store->erase(live[at]);
+                live[at] = live.back();
+                live.pop_back();
+            } else {
+                store->modify(live[at]) = int(rng() % 30);
+            }
+        }
+        pull(*up);
+        checkOrdered(*up, valuesOf(ms));
+        if (round % 2 == 0) {
+            pull(*down);
+            checkOrdered(*down, valuesOf(ms));
+        }
+        if (round % 4 == 0) {
+            std::multiset<int> evens;
+            for (const auto &[i, v] : ms.model)
+                if (isEven(v))
+                    evens.insert(v);
+            pull(*evensUp);
+            checkOrdered(*evensUp, evens);
+        }
+        if (round % 3 == 0) {
+            pull(*upEvens);
+            for (Index q = 0; q < up->count(); ++q)
+                assert(mf.model.count(q) == isEven((*up)[q]));
+        }
+    }
+    unlisten(*store, ms);
+    unlisten(*up, mu);
+    unlisten(*down, md);
+    unlisten(*evensUp, me);
+    unlisten(*upEvens, mf);
+}
+
+/**
+ * A sort, and a filter over it, follow random toggles, modifications, swaps
+ * and relocations of a `SwapSource`; rounds of swaps alone must neither
+ * compare items nor call the predicate
+ */
+void checkSortSwaps(std::mt19937 &rng) {
+    constexpr Index n = 300;
+    auto src = std::make_shared<SwapSource>(n);
+    for (Index i = 0; i < n; i += 2)
+        src->toggle(i, int(rng() % 30));
+    Ledger ledger;
+    auto sorted = ledger.get(Sort{From{src}, CountedLess{}});
+    auto evens =
+        ledger.get(Filter{Sort{From{src}, CountedLess{}}, CountedEven{}});
+    Mirror<SwapSource> ms(*src);
+    Mirror<decltype(sorted)::element_type> mo(*sorted);
+    Mirror<decltype(evens)::element_type> me(*evens);
+    src->addListener(&ms);
+    sorted->addListener(&mo);
+    evens->addListener(&me);
+    src->addInterests(SlotInterest::ALL);
+    sorted->addInterests(SlotInterest::ALL);
+    evens->addInterests(SlotInterest::ALL);
+
+    for (int round = 0; round < 1500; ++round) {
+        const bool swapsOnly = rng() % 3 == 0;
+        const bool relocated = !swapsOnly && rng() % 8 == 0;
+        if (relocated)
+            src->relocate();
+        const int ops = int(rng() % (round % 7 ? 8 : 300));
+        for (int k = 0; k < ops; ++k) {
+            const Index i = Index(rng() % n), j = Index(rng() % n);
+            const int op = swapsOnly ? 0 : int(rng() % 3);
+            if (op == 0) {
+                if (i != j)
+                    src->swap(i, j);
+            } else if (op == 1 || !src->isTaken(i))
+                src->toggle(i, int(rng() % 30));
+            else
+                src->modify(i, int(rng() % 30));
+        }
+        const long compares = CountedLess::calls, checks = CountedEven::calls;
+        const auto before = mo.model;
+        pull(*evens);
+        if (swapsOnly) {
+            assert(CountedLess::calls == compares);
+            assert(CountedEven::calls == checks);
+            assert(mo.model == before);
+        }
+        // SwapSource swaps item storage, so a swap of a sorted item gives
+        // its position a new address, which the sort reports as relocated
+        assert(!relocated || mo.relocated);
+        assert(me.relocated == mo.relocated);
+        mo.relocated = me.relocated = false;
+        checkOrdered(*sorted, valuesOf(ms));
+        for (Index q = 0; q < sorted->count(); ++q)
+            assert(me.model.count(q) == ((*sorted)[q] % 2 == 0));
+    }
+    src->removeListener(&ms);
+    sorted->removeListener(&mo);
+    evens->removeListener(&me);
+    src->removeInterests(SlotInterest::ALL);
+    sorted->removeInterests(SlotInterest::ALL);
+    evens->removeInterests(SlotInterest::ALL);
+}
+
+// The delta of `VecSource`: it says only that something changed
+struct VecDelta {
+    using Interests = std::uint8_t;
+};
+
+/**
+ * A test-only original that is `ListViewable` but not `SlotViewable`: a
+ * plain vector, so appends may move every item
+ */
+class VecSource : public Broadcaster<VecDelta> {
+  public:
+    using Item = int;
+    using Delta = VecDelta;
+    using Query = From<VecSource>;
+
+    void push(int v) {
+        record();
+        m_items.push_back(v);
+    }
+    void set(std::size_t i, int v) {
+        record();
+        m_items[i] = v;
+    }
+    void eraseAt(std::size_t i) {
+        record();
+        m_items.erase(m_items.begin() + std::ptrdiff_t(i));
+    }
+    void flush() {
+        if (!m_changed)
+            return;
+        m_changed = false;
+        broadcast(VecDelta{});
+    }
+    auto begin() const { return m_items.begin(); }
+    auto end() const { return m_items.end(); }
+    std::size_t count() const { return m_items.size(); }
+    const std::vector<int> &items() const { return m_items; }
+
+  private:
+    void record() {
+        if (!m_changed) {
+            m_changed = true;
+            broadcastDirty();
+        }
+    }
+
+    std::vector<int> m_items;
+    bool m_changed = false;
+};
+
+/**
+ * The general path: a sort over a `VecSource` re-sorts on every change,
+ * reports new addresses as replaced and never sets `relocated`; it is read
+ * only now and then, so it also defers
+ */
+void checkSortGeneral(std::mt19937 &rng) {
+    static_assert(ListViewable<VecSource> && !SlotViewable<VecSource>);
+    auto src = std::make_shared<VecSource>();
+    for (int k = 0; k < 100; ++k)
+        src->push(int(rng() % 30));
+    Ledger ledger;
+    auto sorted = ledger.get(Sort{From{src}, Greater{}});
+    static_assert(OrderedViewable<decltype(sorted)::element_type>);
+    Mirror<decltype(sorted)::element_type> mo(*sorted);
+    sorted->addListener(&mo);
+    sorted->addInterests(SlotInterest::ALL);
+    for (int round = 0; round < 1000; ++round) {
+        const int ops = int(rng() % 6);
+        for (int k = 0; k < ops; ++k) {
+            const int op = int(rng() % 3);
+            if (op == 0 || src->count() == 0)
+                src->push(int(rng() % 30));
+            else if (op == 1)
+                src->eraseAt(rng() % src->count());
+            else
+                src->set(rng() % src->count(), int(rng() % 30));
+        }
+        // Skipped reads still flush the source, as another reader would: the
+        // first delta after a read applies at once, later ones defer
+        if (rng() % 3 == 0) {
+            src->flush();
+            continue;
+        }
+        sorted->sync();
+        sorted->flush();
+        assert(!mo.relocated);
+        checkOrdered(*sorted, std::multiset<int>(src->items().begin(),
+                                                 src->items().end()));
+    }
+    sorted->removeListener(&mo);
+    sorted->removeInterests(SlotInterest::ALL);
+}
+
 struct Big {
     char bytes[100000]; // larger than a chunk: one cell per chunk
 };
@@ -217,6 +747,11 @@ int main() {
     checkCoalescing();
     std::mt19937 rng(42);
     checkFolding(rng);
+    checkSwaps(rng);
+    checkOrderTools(rng);
+    checkSortSlot(rng);
+    checkSortSwaps(rng);
+    checkSortGeneral(rng);
     auto store = std::make_shared<Store>();
     Ledger ledger;
     auto evens = ledger.get(Filter{From{store}, isEven});
@@ -234,7 +769,7 @@ int main() {
     store->emplace(2);
     store->emplace(3);
     pull(*bigEvens);
-    assert(evens->activeCount() == 1 && bigEvens->activeCount() == 0);
+    assert(evens->count() == 1 && bigEvens->count() == 0);
 
     Mirror<Store> ms(*store);
     Mirror<decltype(evens)::element_type> me(*evens);

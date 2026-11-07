@@ -110,8 +110,7 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
     void flush() {
         if (m_diff.empty())
             return;
-        this->broadcast(
-            m_diff.delta(activeCount(), slotCount(), this->interests()));
+        this->broadcast(m_diff.delta(count(), slotCount(), this->interests()));
         m_diff.clear();
     }
 
@@ -123,7 +122,7 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
 
     bool isTaken(Index i) const { return m_pool.isTaken(i); }
     BitSpan takenBits() const { return m_pool.takenBits(); }
-    Index activeCount() const { return m_pool.activeCount(); }
+    Index count() const { return m_pool.count(); }
     Index slotCount() const { return m_pool.slotCount(); }
 
     Iterator begin() const { return {this, 0}; }

@@ -69,7 +69,7 @@ template <std::integral TIndexT> class SlotIndexPool {
     /**
      * @returns the number of taken indices
      */
-    IndexT activeCount() const {
+    IndexT count() const {
         return static_cast<IndexT>(m_taken.size() - m_freeCount);
     }
 

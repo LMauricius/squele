@@ -1,12 +1,13 @@
 // Slot view benchmark: iteration, filter construction and delta handling on
 // dense and sparse stores. Prints the best of several runs per case.
+#include "bench.hpp"
+
 #include "squele/core/ledger.hpp"
-#include "squele/views/filter.hpp"
+#include "squele/queries/filter.hpp"
 #include "squele/views/slotStore.hpp"
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <random>
@@ -44,29 +45,6 @@ template <int K, class Q> auto chain(Q q) {
 }
 
 constexpr Index slots = 1 << 20;
-constexpr int runs = 7;
-
-/**
- * Keeps results alive, so the compiler cannot drop the measured work
- */
-volatile long long g_sink;
-
-/**
- * Prints the best time of `runs` calls of `setup()` then `work()`; only
- * `work()` is timed
- */
-template <class S, class W> void bench(const char *name, S setup, W work) {
-    double best = 1e300;
-    for (int r = 0; r < runs; ++r) {
-        setup();
-        const auto t0 = std::chrono::steady_clock::now();
-        work();
-        const auto t1 = std::chrono::steady_clock::now();
-        best = std::min(
-            best, std::chrono::duration<double, std::micro>(t1 - t0).count());
-    }
-    std::printf("%-34s %12.1f us\n", name, best);
-}
 
 /**
  * Sums the items of a view through its iterator
@@ -101,9 +79,8 @@ void suite(const char *kind, Index keep) {
     auto none = [] {};
     bench("iterate store", none, [&] { g_sink = sum(*store); });
     bench("iterate filter", none, [&] { g_sink = sum(*evens); });
-    bench("construct filter", none, [&] {
-        g_sink = Evens{From{store}, isEven}.result(ledger)->activeCount();
-    });
+    bench("construct filter", none,
+          [&] { g_sink = Evens{From{store}, isEven}.result(ledger)->count(); });
 
     // Small delta: a few scattered modifications through two filter levels
     auto touch = [&](std::size_t n) {
@@ -151,7 +128,7 @@ void suite(const char *kind, Index keep) {
     evens.reset();
     ledger.collect();
     bench("construct filter, functor", none, [&] {
-        g_sink = EvensF{From{store}, IsEven{}}.result(ledger)->activeCount();
+        g_sink = EvensF{From{store}, IsEven{}}.result(ledger)->count();
     });
     auto bigsF = ledger.get(BigsF{EvensF{From{store}, IsEven{}}, IsBig{}});
     bench(
@@ -195,8 +172,7 @@ void largeSuite() {
     bench(
         "construct filter", [] {},
         [&] {
-            g_sink =
-                Filter{From{store}, isEvenLarge}.result(ledger)->activeCount();
+            g_sink = Filter{From{store}, isEvenLarge}.result(ledger)->count();
         });
 }
 

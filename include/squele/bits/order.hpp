@@ -1,0 +1,85 @@
+#pragma once
+#ifndef H_INCLUDED_SQUELE_BITS_ORDER
+#define H_INCLUDED_SQUELE_BITS_ORDER
+
+#include <algorithm>
+#include <bit>
+#include <concepts>
+#include <cstddef>
+#include <iterator>
+#include <span>
+#include <utility>
+
+namespace squele {
+
+/**
+ * Merges the sorted `batch` into the sorted first `n` elements of `out`, in
+ * place from the back. A sort view needs it to re-sort only its changed
+ * items: O(n - p + k) moves for k batch elements, and O(k log n) comparisons
+ * for a small batch (a binary search per element) or O(n - p + k) for a large
+ * one (a linear merge), whichever is fewer; never more than a full sort.
+ * A batch element goes after its equals already in `out`, so fewer elements
+ * move, and the order of the first `n` elements among themselves is kept.
+ * @param out `n` sorted elements, then `batch.size()` elements to overwrite
+ * @param batch sorted by `less`
+ * @returns the first position whose element changed (`n` if `batch` is empty)
+ */
+template <class T, class TLess>
+std::size_t mergeSortedBack(std::span<T> out, std::size_t n,
+                            std::span<const T> batch, TLess less) {
+    std::size_t end = n;
+    // Large batch: a linear merge from the back; an element of `out` moves
+    // only past batch elements that precede it
+    if (batch.size() * static_cast<std::size_t>(std::bit_width(n)) >= n) {
+        for (std::size_t j = batch.size(); j > 0;) {
+            if (end > 0 && less(batch[j - 1], out[end - 1])) {
+                out[end + j - 1] = std::move(out[end - 1]);
+                --end;
+            } else {
+                --j;
+                out[end + j] = batch[j];
+            }
+        }
+        return end;
+    }
+    // Small batch: largest element first, so it lands past every element it
+    // does not precede, and the search range shrinks to the elements left
+    // before it
+    for (std::size_t j = batch.size(); j-- > 0;) {
+        const auto at = static_cast<std::size_t>(
+            std::upper_bound(out.begin(), out.begin() + end, batch[j], less) -
+            out.begin());
+        // Shift the elements after the insertion point past the j batch
+        // elements still to come, then place this one
+        std::move_backward(out.begin() + at, out.begin() + end,
+                           out.begin() + end + j + 1);
+        out[at + j] = batch[j];
+        end = at;
+    }
+    return end;
+}
+
+/**
+ * Applies the permutation `to` by swaps: the element at offset `i` goes to
+ * offset `to[i]`, and `swap(base + i, base + j)` is called for each swap. A
+ * sort view reports its reordering as swaps; this cycle walk needs at most one
+ * swap per moved element and no memory besides `to`.
+ * @param to a permutation of `0..to.size()-1`; left as the identity
+ */
+template <std::integral TIndexT, class TSwapF>
+void permuteBySwaps(std::span<TIndexT> to, TIndexT base, TSwapF &&swap) {
+    for (std::size_t i = 0; i < to.size(); ++i) {
+        // Each swap puts the element now at i where it belongs (j); i then
+        // holds j's old element, which takes over j's destination
+        while (static_cast<std::size_t>(to[i]) != i) {
+            const TIndexT j = to[i];
+            swap(static_cast<TIndexT>(base + static_cast<TIndexT>(i)),
+                 static_cast<TIndexT>(base + j));
+            std::swap(to[i], to[static_cast<std::size_t>(j)]);
+        }
+    }
+}
+
+} // namespace squele
+
+#endif // H_INCLUDED_SQUELE_BITS_ORDER

@@ -1,8 +1,7 @@
 #pragma once
-#ifndef H_INCLUDED_SQUELE_VIEWS_FILTER
-#define H_INCLUDED_SQUELE_VIEWS_FILTER
+#ifndef H_INCLUDED_SQUELE_VIEWS_SLOTFILTERVIEW
+#define H_INCLUDED_SQUELE_VIEWS_SLOTFILTERVIEW
 
-#include "squele/bits/hash.hpp"
 #include "squele/bits/pull.hpp"
 #include "squele/bits/slotBits.hpp"
 #include "squele/bits/slotIterator.hpp"
@@ -10,123 +9,12 @@
 #include "squele/core/concepts.hpp"
 #include "squele/core/ledger.hpp"
 #include "squele/deltas/slot.hpp"
+#include "squele/queries/filter.hpp"
 
 #include <bit>
-#include <cassert>
-#include <concepts>
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <span>
-#include <type_traits>
-#include <utility>
-
-namespace squele {
-
-/**
- * A callable that can be part of a query key: it is copyable, accepts a
- * `const TItemT &`, and is compared and hashed as one of
- * - a function pointer, by value;
- * - an empty type (a named functor, a captureless lambda), by type alone:
- *   the `Ledger` keeps one cache per query type, so all such keys are equal;
- * - any other type, by its `operator==` and `std::hash`.
- */
-template <class P, class TItemT>
-concept FilterPredicate =
-    std::copyable<P> && std::predicate<const P &, const TItemT &> &&
-    (std::is_pointer_v<P> || std::is_empty_v<P> ||
-     (std::equality_comparable<P> && requires(const P &p) {
-         { std::hash<P>{}(p) } -> std::convertible_to<std::size_t>;
-     }));
-
-namespace detail {
-
-/**
- * The function pointer type that `Filter` uses by default, so existing code
- * that names `Filter<Q>` keeps its meaning
- */
-template <class TSourceQ>
-using PredicatePtr = bool (*)(const typename TSourceQ::View::Item &);
-
-} // namespace detail
-
-// Views take their source view, not its query, so their names stay short
-// (`SlotFilterView<Store>`); the query is recovered from the source's query
-// and the predicate type
-template <Viewable TSourceT,
-          class TPredT = detail::PredicatePtr<typename TSourceT::Query>>
-class FilterView;
-template <Viewable TSourceT,
-          class TPredT = detail::PredicatePtr<typename TSourceT::Query>>
-class SlotFilterView;
-
-/**
- * A query for the items of a source that pass a predicate.
- * Its view is `SlotFilterView` for a `SlotViewable` source, else `FilterView`.
- * @note The predicate is a `FilterPredicate`, so the query is comparable and
- * hashable. A function pointer is called indirectly; an empty functor or a
- * captureless lambda (`Filter{q, [](const T &x) { ... }}`) is inlined into
- * the view. A lambda is a new type each time it is written, so two written
- * lambdas give two views (as two pointers do); name the predicate to share
- * one view.
- */
-template <Queryable TSourceQ, class TPredT = detail::PredicatePtr<TSourceQ>>
-    requires FilterPredicate<TPredT, typename TSourceQ::View::Item>
-class Filter {
-  public:
-    using SourceQ = TSourceQ;
-    using Source = typename SourceQ::View;
-    using Item = typename Source::Item;
-    using Predicate = TPredT;
-    using View = std::conditional_t<SlotViewable<Source>,
-                                    SlotFilterView<Source, Predicate>,
-                                    FilterView<Source, Predicate>>;
-
-    /**
-     * @param source the source's query (`From{p_view}` for an original)
-     * @param pred the predicate; a function pointer must not be null
-     * (asserted). It must not throw
-     */
-    Filter(TSourceQ source, Predicate pred)
-        : m_source(std::move(source)), m_pred(std::move(pred)) {
-        if constexpr (std::is_pointer_v<Predicate>)
-            assert(m_pred);
-    }
-
-    std::shared_ptr<View> result(Ledger &ledger) const {
-        return std::make_shared<View>(ledger, *this);
-    }
-
-    const SourceQ &source() const { return m_source; }
-    const Predicate &predicate() const { return m_pred; }
-
-    bool operator==(const Filter &o) const {
-        if constexpr (std::is_empty_v<Predicate>)
-            return m_source == o.m_source;
-        else
-            return m_source == o.m_source && m_pred == o.m_pred;
-    }
-
-  private:
-    SourceQ m_source;
-    [[no_unique_address]] Predicate m_pred;
-};
-
-} // namespace squele
-
-// Defined before the views, so Queryable<Filter<...>> never sees it missing
-template <class TSourceQ, class TPredT>
-struct std::hash<squele::Filter<TSourceQ, TPredT>> {
-    std::size_t operator()(const squele::Filter<TSourceQ, TPredT> &q) const {
-        const std::size_t h = std::hash<TSourceQ>{}(q.source());
-        // An empty predicate is part of the type, which the Ledger already
-        // keys on
-        if constexpr (std::is_empty_v<TPredT>)
-            return h;
-        else
-            return squele::combineHash(h, std::hash<TPredT>{}(q.predicate()));
-    }
-};
 
 namespace squele {
 
@@ -152,7 +40,9 @@ template <Viewable TSourceT, class TPredT> class FilterView {
  * once per source change. A view that is not read folds the deltas into a
  * pending diff instead, and re-checks the net changes on its next `sync()`. Its
  * pass flags and its own diff are updated a word (64 slots) at a time, from
- * the delta's word blocks.
+ * the delta's word blocks. A swap in the source swaps the pass flags without
+ * re-checking, and is forwarded unless both slots fail. A relocation in the
+ * source is forwarded as it is.
  */
 template <Viewable TSourceT, class TPredT>
 class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
@@ -193,7 +83,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
             }
             pass[at] = next;
             if (next)
-                m_activeCount += static_cast<Index>(std::popcount(next));
+                m_count += static_cast<Index>(std::popcount(next));
         }
         m_source->addInterests(sourceInterests);
         m_source->addListener(this);
@@ -245,10 +135,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
             if (!m_pending.empty()) {
                 // The source was just pulled, so it is consistent with the
                 // pending changes; only slots that still hold an item are read
-                namespace SI = SlotInterest;
-                apply(m_pending.delta(0, m_pendingSlotCount,
-                                      SI::SPARSE_SPANS | SI::WORDS |
-                                          SI::TOUCHED_WORDS));
+                apply(m_pending.delta(0, m_pendingSlotCount, sourceInterests));
                 m_pending.clear();
             }
             m_dirty = false;
@@ -265,8 +152,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     void flush() {
         if (m_diff.empty())
             return;
-        this->broadcast(
-            m_diff.delta(m_activeCount, slotCount(), this->interests()));
+        this->broadcast(m_diff.delta(m_count, slotCount(), this->interests()));
         m_diff.clear();
     }
 
@@ -283,7 +169,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
 
     BitSpan takenBits() const { return m_pass; }
 
-    Index activeCount() const { return m_activeCount; }
+    Index count() const { return m_count; }
     Index slotCount() const { return static_cast<Index>(m_pass.size()); }
 
     Iterator begin() const { return {this, 0}; }
@@ -298,6 +184,12 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     void apply(const Delta &d) noexcept {
         if (static_cast<std::size_t>(d.slotCount) > m_pass.size())
             m_pass.resize(static_cast<std::size_t>(d.slotCount));
+        // The items are the source's, so their addresses move with it
+        if (d.relocated && this->hasListeners()) [[unlikely]]
+            m_diff.relocate();
+        // Swaps first: the other changes start from the swapped state
+        if (!d.swapped.empty()) [[unlikely]]
+            swapAll(d.swapped);
         // Per index over the spans while sparse (the source fills them only
         // then, see SPARSE_SPANS); word level otherwise
         if (d.sparse()) {
@@ -333,8 +225,8 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
             }
             pass[at] = next;
             // Subtract first: old bits are counted, so this never wraps
-            m_activeCount -= static_cast<Index>(std::popcount(old));
-            m_activeCount += static_cast<Index>(std::popcount(next));
+            m_count -= static_cast<Index>(std::popcount(old));
+            m_count += static_cast<Index>(std::popcount(next));
 
             // Without listeners nothing is recorded, so flush() stays a no-op
             if (record)
@@ -342,14 +234,44 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
         }
     }
 
-    // Read from the source's deltas: the spans by the per-index path (sparse
+    // Read from the source's deltas: the swaps first, the spans by the
+    // per-index path (sparse
     // deltas only), the word blocks by the word path. Fixed, since `m_pass`
     // needs every change whatever this view's listeners want
     static constexpr typename Delta::Interests sourceInterests =
         SlotInterest::SPARSE_SPANS | SlotInterest::WORDS |
-        SlotInterest::TOUCHED_WORDS;
+        SlotInterest::TOUCHED_WORDS | SlotInterest::SWAPPED;
 
     bool check(Index i) const { return m_pred((*m_source)[i]); }
+
+    /**
+     * Applies the source's swaps in order. Kept out of line: inlined into
+     * `apply()`, it slowed sparse deltas without swaps by about 5%
+     */
+    [[gnu::noinline]] void swapAll(std::span<const typename Delta::Swap> s) {
+        for (const auto &[a, b] : s)
+            swap(a, b);
+    }
+
+    /**
+     * Follows a source swap of `a` and `b`: the pass flags trade places with
+     * their items, so the predicate does not run
+     */
+    void swap(Index a, Index b) {
+        const auto at = static_cast<std::size_t>(a);
+        const auto bt = static_cast<std::size_t>(b);
+        const bool pa = m_pass.test(at), pb = m_pass.test(bt);
+        // Two failing slots are both free here, so the swap changes nothing
+        // this view holds or reports (its diff stays valid as it is)
+        if (!pa && !pb)
+            return;
+        if (pa != pb) {
+            pa ? m_pass.reset(at) : m_pass.set(at);
+            pb ? m_pass.reset(bt) : m_pass.set(bt);
+        }
+        if (this->hasListeners())
+            m_diff.swap(a, b);
+    }
 
     /**
      * Records the transition of index `i`:
@@ -363,10 +285,10 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
         if (passed != passes) {
             if (passes) {
                 m_pass.set(at);
-                ++m_activeCount;
+                ++m_count;
             } else {
                 m_pass.reset(at);
-                --m_activeCount;
+                --m_count;
             }
         }
         // Without listeners nothing is recorded, so flush() stays a no-op
@@ -408,7 +330,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     std::shared_ptr<SourceT> m_source; // owned, so it outlives this listener
     [[no_unique_address]] typename Query::Predicate m_pred;
     BitVector m_pass; // per source index: taken and passed
-    Index m_activeCount = 0;
+    Index m_count = 0;
     SlotDiff<Index> m_diff;
     // Source changes not applied yet, and the source's slot count at the
     // last of them
@@ -421,4 +343,4 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
 
 } // namespace squele
 
-#endif // H_INCLUDED_SQUELE_VIEWS_FILTER
+#endif // H_INCLUDED_SQUELE_VIEWS_SLOTFILTERVIEW
