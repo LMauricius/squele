@@ -1,6 +1,6 @@
 #pragma once
-#ifndef H_INCLUDED_SQUELE_VIEWS_SLOTFILTERVIEW
-#define H_INCLUDED_SQUELE_VIEWS_SLOTFILTERVIEW
+#ifndef H_INCLUDED_SQUELE_VIEWS_FILTERVIEW
+#define H_INCLUDED_SQUELE_VIEWS_FILTERVIEW
 
 #include "squele/bits/pull.hpp"
 #include "squele/bits/slotBits.hpp"
@@ -19,18 +19,7 @@
 namespace squele {
 
 /**
- * The view of `Filter` over a source that is not `SlotViewable`.
- * @note Declared only: no such source exists yet.
- */
-template <Viewable TSourceT, class TPredT> class FilterView {
-    // Depends on TSourceT, so it fires only when instantiated (see C++20
-    // pitfalls)
-    static_assert(sizeof(TSourceT) == 0,
-                  "FilterView is not implemented: use a SlotViewable source");
-};
-
-/**
- * The view of `Filter` over a `SlotViewable` source. It reuses the source's
+ * The view of `Filter`. It reuses the source's
  * indices (index `i` is taken when the source's is and the item passed) and
  * reads items from the source, so it owns no item copies. Being
  * `SlotViewable` itself, it can be filtered again.
@@ -43,25 +32,28 @@ template <Viewable TSourceT, class TPredT> class FilterView {
  * the delta's word blocks. A swap in the source swaps the pass flags without
  * re-checking, and is forwarded unless both slots fail. A relocation in the
  * source is forwarded as it is.
+ * @note Only `SlotViewable` sources are supported yet; the general path
+ * (constrained parts for other `ListViewable` sources) is not implemented.
  */
 template <Viewable TSourceT, class TPredT>
-class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
+    requires SlotViewable<TSourceT>
+class FilterView : public Broadcaster<typename TSourceT::Delta> {
   public:
     using SourceT = TSourceT;
     using Query = Filter<typename SourceT::Query, TPredT>;
     using Item = typename SourceT::Item;
     using Index = typename SourceT::Index;
     using Delta = typename SourceT::Delta;
-    using Iterator = SlotIterator<SlotFilterView>;
+    using Iterator = SlotIterator<FilterView>;
 
     /**
      * Gets the source from `ledger`, checks every source item and starts
      * listening. The view starts clean.
      */
-    SlotFilterView(Ledger &ledger, const Query &query)
+    FilterView(Ledger &ledger, const Query &query)
         : m_source(ledger.getUnsynced(query.source())),
           m_pred(query.predicate()) {
-        static_assert(Dependent<SlotFilterView, SourceT>);
+        static_assert(Dependent<FilterView, SourceT>);
 
         // Make the source consistent and leave nothing unflushed, so no
         // change is missed between this scan and addListener()
@@ -89,7 +81,7 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
         m_source->addListener(this);
     }
 
-    ~SlotFilterView() {
+    ~FilterView() {
         m_source->removeListener(this);
         m_source->removeInterests(sourceInterests);
     }
@@ -343,4 +335,4 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
 
 } // namespace squele
 
-#endif // H_INCLUDED_SQUELE_VIEWS_SLOTFILTERVIEW
+#endif // H_INCLUDED_SQUELE_VIEWS_FILTERVIEW

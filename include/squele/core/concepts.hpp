@@ -6,6 +6,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -162,6 +163,25 @@ concept SlotViewable =
         { t.begin().index() } -> std::same_as<typename T::Index>;
         { t.begin() == t.end() } -> std::same_as<bool>;
     };
+
+namespace detail {
+
+template <class TSourceT> struct ViewIndexOf {
+    using type = std::uint32_t;
+};
+template <SlotViewable TSourceT> struct ViewIndexOf<TSourceT> {
+    using type = typename TSourceT::Index;
+};
+
+} // namespace detail
+
+/**
+ * The index type of a slot view derived from `TSourceT` (a sort or a map):
+ * the source's for a slot source (the view never needs more indices), else
+ * a 32-bit default as in `SlotStore`
+ */
+template <class TSourceT>
+using ViewIndex = typename detail::ViewIndexOf<TSourceT>::type;
 
 /**
  * A slot view whose items are sorted by `T::Compare`.

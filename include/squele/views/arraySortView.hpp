@@ -28,23 +28,18 @@ namespace squele {
 namespace detail {
 
 /**
- * The index type of a sort view over `TSourceT`: the source's for a slot
- * source (positions never outnumber its indices), else a 32-bit default as
- * in `SlotStore`
- */
-template <class TSourceT> struct SortIndex {
-    using type = std::uint32_t;
-};
-template <SlotViewable TSourceT> struct SortIndex<TSourceT> {
-    using type = typename TSourceT::Index;
-};
-
-/**
  * Take no space in an entry of the general path, which has no source index
  * and no position to remember; two types, so both members can overlap
  */
 struct NoIndex {};
 struct NoPos {};
+
+/**
+ * Take no space in a sort view for the state of the path it does not use;
+ * two types, so both members can overlap
+ */
+struct NoSlotState {};
+struct NoGeneralState {};
 
 /**
  * The bits of the positions `[lo, hi)` within the word that starts at
@@ -78,20 +73,18 @@ constexpr BitWord rangeBits(std::size_t base, std::size_t lo, std::size_t hi) {
  *   sorted alone and merged back; the reordering is reported as swaps, so a
  *   filter over this view follows it without calling its predicate.
  *
- * Like `SlotFilterView`, it applies deltas eagerly while it is read every
+ * Like `FilterView`, it applies deltas eagerly while it is read every
  * cycle, and otherwise defers them to its next `sync()`.
  * @note Positions shift on insertion and removal: one change near the front
  * reports a swap for every later position.
  */
 template <ListViewable TSourceT, class TCmpT>
-class ArraySortView
-    : public Broadcaster<
-          SlotDelta<typename detail::SortIndex<TSourceT>::type>> {
+class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
   public:
     using SourceT = TSourceT;
     using Query = Sort<typename SourceT::Query, TCmpT>;
     using Item = typename SourceT::Item;
-    using Index = typename detail::SortIndex<SourceT>::type;
+    using Index = ViewIndex<SourceT>;
     using Delta = SlotDelta<Index>;
     using Compare = TCmpT;
     using Iterator = SlotIterator<ArraySortView>;
@@ -128,17 +121,17 @@ class ArraySortView
      */
     void onDelta([[maybe_unused]] const typename SourceT::Delta &d) noexcept {
         if constexpr (slotPath) {
-            if (m_readSinceDelta && m_pending.empty()) {
+            if (m_readSinceDelta && m_slot.pending.empty()) {
                 apply(d);
             } else {
-                m_pending.fold(d);
-                m_pendingSlotCount = d.slotCount;
+                m_slot.pending.fold(d);
+                m_slot.pendingSlotCount = d.slotCount;
             }
         } else {
-            if (m_readSinceDelta && !m_resortDue)
+            if (m_readSinceDelta && !m_general.resortDue)
                 sortAll();
             else
-                m_resortDue = true;
+                m_general.resortDue = true;
         }
         m_readSinceDelta = false;
     }
@@ -165,14 +158,14 @@ class ArraySortView
             // The source was just pulled, so it is consistent with the
             // deferred changes
             if constexpr (slotPath) {
-                if (!m_pending.empty()) {
-                    apply(m_pending.delta(0, m_pendingSlotCount,
-                                          sourceInterests));
-                    m_pending.clear();
+                if (!m_slot.pending.empty()) {
+                    apply(m_slot.pending.delta(0, m_slot.pendingSlotCount,
+                                               sourceInterests));
+                    m_slot.pending.clear();
                 }
-            } else if (m_resortDue) {
+            } else if (m_general.resortDue) {
                 sortAll();
-                m_resortDue = false;
+                m_general.resortDue = false;
             }
             m_dirty = false;
         }
@@ -225,12 +218,32 @@ class ArraySortView
      * One position: its item, and on the slot path its source index and its
      * position after the last delta (`npos` while new). The position fills
      * the padding after a 32-bit index, and spares the reorder step a lookup
-     * in `m_rank` (a cache miss) per entry
+     * in `m_slot.rank` (a cache miss) per entry
      */
     struct Entry {
         const Item *p_item;
         [[no_unique_address]] SourceIndex index;
         [[no_unique_address]] Position pos;
+    };
+
+    /**
+     * Slot path state: the position of each source index (npos when free),
+     * the deferred source changes, and scratch buffers that keep their
+     * capacity
+     */
+    struct SlotState {
+        std::vector<Index> rank;
+        SlotDiff<Index> pending;
+        Index pendingSlotCount = 0;
+        std::vector<Index> stale; // positions with stale pointers
+        std::vector<Index> to;    // the reorder permutation
+    };
+
+    /**
+     * General path state
+     */
+    struct GeneralState {
+        bool resortDue = false; // a re-sort is deferred to the next sync()
     };
 
     // Slot path: the spans for the per-index steps, the swaps, and the words
@@ -275,8 +288,8 @@ class ArraySortView
         m_order.swap(m_batch);
 
         if constexpr (slotPath) {
-            m_rank.assign(static_cast<std::size_t>(m_source->slotCount()),
-                          npos);
+            m_slot.rank.assign(static_cast<std::size_t>(m_source->slotCount()),
+                               npos);
             setPositions(0);
         }
         setTaken(m_order.size());
@@ -288,7 +301,9 @@ class ArraySortView
      * whose item address is unchanged is modified, one with a new address
      * replaced (erase + create); the tail is created or erased.
      */
-    void recordResort() {
+    void recordResort()
+        requires(!slotPath)
+    {
         const std::size_t n0 = m_order.size(), n1 = m_batch.size();
         const std::size_t lo = std::min(n0, n1), hi = std::max(n0, n1);
         for (std::size_t base = 0; base < hi; base += bitWordBits) {
@@ -318,12 +333,14 @@ class ArraySortView
      * Slot path: applies a delta of the source, which must be consistent
      * with it
      */
-    void apply(const typename SourceT::Delta &d) noexcept {
+    void apply(const typename SourceT::Delta &d) noexcept
+        requires slotPath
+    {
         notePeak();
         const bool record = this->hasListeners();
         const std::size_t oldCount = m_order.size();
-        if (static_cast<std::size_t>(d.slotCount) > m_rank.size())
-            m_rank.resize(static_cast<std::size_t>(d.slotCount), npos);
+        if (static_cast<std::size_t>(d.slotCount) > m_slot.rank.size())
+            m_slot.rank.resize(static_cast<std::size_t>(d.slotCount), npos);
         // The items are the source's, so their addresses move with it
         if (d.relocated && record) [[unlikely]]
             m_diff.relocate();
@@ -351,8 +368,8 @@ class ArraySortView
         // Modified items stay where still ordered, else leave and come back
         // as kept entries (their rank still holds the old position)
         for (Index i : d.modified) {
-            const auto pos =
-                static_cast<std::size_t>(m_rank[static_cast<std::size_t>(i)]);
+            const auto pos = static_cast<std::size_t>(
+                m_slot.rank[static_cast<std::size_t>(i)]);
             assert(pos < oldCount);
             if (record)
                 m_diff.modify(static_cast<Index>(pos));
@@ -365,7 +382,7 @@ class ArraySortView
         for (Index i : d.replaced)
             m_batch.push_back({&(*m_source)[i], i, npos});
         for (Index i : d.created) {
-            assert(m_rank[static_cast<std::size_t>(i)] == npos);
+            assert(m_slot.rank[static_cast<std::size_t>(i)] == npos);
             m_batch.push_back({&(*m_source)[i], i, npos});
         }
 
@@ -395,19 +412,21 @@ class ArraySortView
      * so nothing is compared or recorded. The entries' pointers are stale
      * until `refreshPointers()`
      */
-    void remapSwaps(std::span<const typename Delta::Swap> s) {
-        m_stale.clear();
+    void remapSwaps(std::span<const typename Delta::Swap> s)
+        requires slotPath
+    {
+        m_slot.stale.clear();
         for (const auto &[a, b] : s) {
-            Index &ra = m_rank[static_cast<std::size_t>(a)];
-            Index &rb = m_rank[static_cast<std::size_t>(b)];
+            Index &ra = m_slot.rank[static_cast<std::size_t>(a)];
+            Index &rb = m_slot.rank[static_cast<std::size_t>(b)];
             std::swap(ra, rb);
             if (ra != npos) {
                 m_order[static_cast<std::size_t>(ra)].index = a;
-                m_stale.push_back(ra);
+                m_slot.stale.push_back(ra);
             }
             if (rb != npos) {
                 m_order[static_cast<std::size_t>(rb)].index = b;
-                m_stale.push_back(rb);
+                m_slot.stale.push_back(rb);
             }
         }
     }
@@ -417,8 +436,10 @@ class ArraySortView
      * marks it), records its position erased and sets its rank to `npos`
      * @returns its position
      */
-    std::size_t takeOut(Index i, bool record) {
-        Index &rank = m_rank[static_cast<std::size_t>(i)];
+    std::size_t takeOut(Index i, bool record)
+        requires slotPath
+    {
+        Index &rank = m_slot.rank[static_cast<std::size_t>(i)];
         const auto pos = static_cast<std::size_t>(rank);
         assert(pos < m_order.size());
         m_order[pos].p_item = nullptr;
@@ -434,7 +455,9 @@ class ArraySortView
      * skipped, since their source slots may be free
      * @returns whether a stale pointer changed (always false when `all`)
      */
-    bool refreshPointers(bool all) {
+    bool refreshPointers(bool all)
+        requires slotPath
+    {
         if (all) [[unlikely]] {
             for (Entry &e : m_order)
                 if (e.p_item)
@@ -442,7 +465,7 @@ class ArraySortView
             return false;
         }
         bool changed = false;
-        for (Index pos : m_stale) {
+        for (Index pos : m_slot.stale) {
             Entry &e = m_order[static_cast<std::size_t>(pos)];
             if (!e.p_item)
                 continue;
@@ -460,7 +483,9 @@ class ArraySortView
      * untouched). Equal neighbours count as ordered. A touched neighbour
      * may be taken out or moved, so it is never compared
      */
-    bool keptInPlace(const typename SourceT::Delta &d, std::size_t pos) const {
+    bool keptInPlace(const typename SourceT::Delta &d, std::size_t pos) const
+        requires slotPath
+    {
         auto untouched = [&](std::size_t q) {
             const auto i = static_cast<std::size_t>(m_order[q].index);
             const std::size_t w = i / bitWordBits;
@@ -480,7 +505,9 @@ class ArraySortView
      * Slot path: removes the taken-out entries from `p0` on, keeping the
      * order of the rest. O(count - p0)
      */
-    void compact(std::size_t p0) {
+    void compact(std::size_t p0)
+        requires slotPath
+    {
         const auto first = m_order.begin() + static_cast<std::ptrdiff_t>(p0);
         m_order.erase(std::remove_if(first, m_order.end(),
                                      [](const Entry &e) { return !e.p_item; }),
@@ -494,18 +521,20 @@ class ArraySortView
      * yet, so a kept entry's `pos` is its old position, and a new entry's is
      * `npos`.
      */
-    void recordReorder(std::size_t p, std::size_t oldCount) {
+    void recordReorder(std::size_t p, std::size_t oldCount)
+        requires slotPath
+    {
         const std::size_t newCount = m_order.size();
         const std::size_t size = std::max(oldCount, newCount);
         if (p >= size)
             return;
         // Old offset -> new offset of each kept entry. Positions before p
         // did not change, so every kept entry from p on came from p on
-        m_to.assign(size - p, npos);
+        m_slot.to.assign(size - p, npos);
         auto oldPos = [this](std::size_t q) { return m_order[q].pos; };
         for (std::size_t q = p; q < newCount; ++q)
             if (const Index o = oldPos(q); o != npos)
-                m_to[static_cast<std::size_t>(o) - p] =
+                m_slot.to[static_cast<std::size_t>(o) - p] =
                     static_cast<Index>(q - p);
 
         // The rest of the old offsets (erased, or free past oldCount) go to
@@ -514,9 +543,9 @@ class ArraySortView
         // fixed point and needs no swap
         std::size_t o = 0;
         auto pair = [&](std::size_t t) {
-            while (m_to[o] != npos)
+            while (m_slot.to[o] != npos)
                 ++o;
-            m_to[o] = static_cast<Index>(t);
+            m_slot.to[o] = static_cast<Index>(t);
         };
         for (std::size_t q = p; q < newCount; ++q)
             if (oldPos(q) == npos)
@@ -527,7 +556,7 @@ class ArraySortView
         // SlotDiff moves the earlier records along with their items: an
         // erase lands on a new entry's position (a create there makes it
         // replaced) or past newCount
-        permuteBySwaps(std::span<Index>(m_to), static_cast<Index>(p),
+        permuteBySwaps(std::span<Index>(m_slot.to), static_cast<Index>(p),
                        [this](Index a, Index b) { m_diff.swap(a, b); });
         for (std::size_t q = p; q < newCount; ++q)
             if (oldPos(q) == npos)
@@ -536,12 +565,14 @@ class ArraySortView
 
     /**
      * Slot path: stores the positions from `p` on, in the entries and in
-     * `m_rank`
+     * `m_slot.rank`
      */
-    void setPositions(std::size_t p) {
+    void setPositions(std::size_t p)
+        requires slotPath
+    {
         for (std::size_t q = p; q < m_order.size(); ++q) {
             m_order[q].pos = static_cast<Index>(q);
-            m_rank[static_cast<std::size_t>(m_order[q].index)] =
+            m_slot.rank[static_cast<std::size_t>(m_order[q].index)] =
                 static_cast<Index>(q);
         }
     }
@@ -578,17 +609,10 @@ class ArraySortView
     // sort, the entries to merge back on the slot path
     std::vector<Entry> m_batch;
 
-    // Slot path only (empty on the general path): the position of each
-    // source index (npos when free), the deferred source changes, and
-    // scratch buffers that keep their capacity
-    std::vector<Index> m_rank;
-    SlotDiff<Index> m_pending;
-    Index m_pendingSlotCount = 0;
-    std::vector<Index> m_stale; // positions with stale pointers
-    std::vector<Index> m_to;    // the reorder permutation
-
-    // General path only: a re-sort is deferred to the next sync()
-    bool m_resortDue = false;
+    [[no_unique_address]] std::conditional_t<slotPath, SlotState,
+                                             detail::NoSlotState> m_slot;
+    [[no_unique_address]] std::conditional_t<slotPath, detail::NoGeneralState,
+                                             GeneralState> m_general;
 };
 
 } // namespace squele

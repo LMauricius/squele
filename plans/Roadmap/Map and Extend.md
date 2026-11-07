@@ -9,7 +9,7 @@ Decisions:
 - General path: any other `ListViewable` source recomputes every result on each flush, reporting changes by position like the general path of `ArraySortView`.
 - `Map` and `Extend` stay separate views. The parts they share (result storage, recomputation and the equality check) live in small `bits/` components that both reuse.
 - One view class serves every source kind; the parts of the slot and dense paths are constrained with `requires` on the source's concepts, so the query never picks between view classes.
-- Like `SlotFilterView`, the view is eager while read every cycle, and otherwise folds deltas until `sync()`.
+- Like `FilterView`, the view is eager while read every cycle, and otherwise folds deltas until `sync()`.
 
 Useful:
 - [Note] Query keys
@@ -21,7 +21,7 @@ Blocks:
 - [Feature] Extend
 
 - [Task] ComparedResult and result tools
-  `bits/result.hpp`: `ComparedResult{eq, fn}` (a `KeyCallable` pair with `callableEqual` and `combineCallableHash` support), and the shared pieces of `Map` and `Extend`: the result type of a plain or compared function, a call that recomputes a result in place and returns whether it changed (always true without `eq`), and raw result storage over `SlotChunks` and `SlotCell`. Tested alone.
+  `bits/result.hpp`: `ComparedResult{eq, fn}` (a `KeyCallable` pair with `callableEqual` and `combineCallableHash` support), and the shared pieces of `Map` and `Extend`: the result type of a plain or compared function, `ResultFunction` and `ResultOf` (the constraint and the result type of a plain or compared function), `resultFn` (the function that constructs a result), and `recomputeResult`, which recomputes a result in place and returns whether it changed (always true without `eq`). Views store results directly in `SlotChunks<SlotCell<R>>`; no wrapper. `ViewIndex` (the index type of a derived view, formerly `ArraySortView`'s `SortIndex`) moves to `core/concepts.hpp`. Tested alone.
 
   Blocks:
   - [Task] Map query and MapView

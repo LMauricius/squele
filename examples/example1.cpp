@@ -21,7 +21,7 @@ using Indices = std::vector<Index>;
 
 static_assert(Original<Store> && SlotViewable<Store>);
 static_assert(Queryable<Filter<From<Store>>>);
-static_assert(std::same_as<Filter<From<Store>>::View, SlotFilterView<Store>>);
+static_assert(std::same_as<Filter<From<Store>>::View, FilterView<Store>>);
 static_assert(std::forward_iterator<Store::Iterator>);
 
 /**
