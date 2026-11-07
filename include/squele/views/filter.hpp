@@ -2,7 +2,7 @@
 #ifndef H_INCLUDED_SQUELE_VIEWS_FILTER
 #define H_INCLUDED_SQUELE_VIEWS_FILTER
 
-#include "squele/bits/hash.hpp"
+#include "squele/bits/callable.hpp"
 #include "squele/bits/pull.hpp"
 #include "squele/bits/slotBits.hpp"
 #include "squele/bits/slotIterator.hpp"
@@ -24,20 +24,12 @@
 namespace squele {
 
 /**
- * A callable that can be part of a query key: it is copyable, accepts a
- * `const TItemT &`, and is compared and hashed as one of
- * - a function pointer, by value;
- * - an empty type (a named functor, a captureless lambda), by type alone:
- *   the `Ledger` keeps one cache per query type, so all such keys are equal;
- * - any other type, by its `operator==` and `std::hash`.
+ * A `QueryCallable` that accepts a `const TItemT &` and returns whether the
+ * item passes
  */
 template <class P, class TItemT>
 concept FilterPredicate =
-    std::copyable<P> && std::predicate<const P &, const TItemT &> &&
-    (std::is_pointer_v<P> || std::is_empty_v<P> ||
-     (std::equality_comparable<P> && requires(const P &p) {
-         { std::hash<P>{}(p) } -> std::convertible_to<std::size_t>;
-     }));
+    QueryCallable<P> && std::predicate<const P &, const TItemT &>;
 
 namespace detail {
 
@@ -101,10 +93,7 @@ class Filter {
     const Predicate &predicate() const { return m_pred; }
 
     bool operator==(const Filter &o) const {
-        if constexpr (std::is_empty_v<Predicate>)
-            return m_source == o.m_source;
-        else
-            return m_source == o.m_source && m_pred == o.m_pred;
+        return m_source == o.m_source && callableEqual(m_pred, o.m_pred);
     }
 
   private:
@@ -118,13 +107,8 @@ class Filter {
 template <class TSourceQ, class TPredT>
 struct std::hash<squele::Filter<TSourceQ, TPredT>> {
     std::size_t operator()(const squele::Filter<TSourceQ, TPredT> &q) const {
-        const std::size_t h = std::hash<TSourceQ>{}(q.source());
-        // An empty predicate is part of the type, which the Ledger already
-        // keys on
-        if constexpr (std::is_empty_v<TPredT>)
-            return h;
-        else
-            return squele::combineHash(h, std::hash<TPredT>{}(q.predicate()));
+        return squele::combineCallableHash(std::hash<TSourceQ>{}(q.source()),
+                                           q.predicate());
     }
 };
 
@@ -153,7 +137,8 @@ template <Viewable TSourceT, class TPredT> class FilterView {
  * pending diff instead, and re-checks the net changes on its next `sync()`. Its
  * pass flags and its own diff are updated a word (64 slots) at a time, from
  * the delta's word blocks. A swap in the source swaps the pass flags without
- * re-checking, and is forwarded unless both slots fail.
+ * re-checking, and is forwarded unless both slots fail. A relocation in the
+ * source is forwarded as it is.
  */
 template <Viewable TSourceT, class TPredT>
 class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
@@ -296,6 +281,9 @@ class SlotFilterView : public Broadcaster<typename TSourceT::Delta> {
     void apply(const Delta &d) noexcept {
         if (static_cast<std::size_t>(d.slotCount) > m_pass.size())
             m_pass.resize(static_cast<std::size_t>(d.slotCount));
+        // The items are the source's, so their addresses move with it
+        if (d.relocated && this->hasListeners()) [[unlikely]]
+            m_diff.relocate();
         // Swaps first: the other changes start from the swapped state
         if (!d.swapped.empty()) [[unlikely]]
             swapAll(d.swapped);

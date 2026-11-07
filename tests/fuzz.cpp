@@ -1,10 +1,12 @@
 // Fuzz test: random store mutations checked against a naive model, through
 // nested filters pulled from random chain levels; deltas are replayed into the
 // model. Asserts are the checks; build without NDEBUG.
+#include "squele/bits/order.hpp"
 #include "squele/core/ledger.hpp"
 #include "squele/views/filter.hpp"
 #include "squele/views/slotStore.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cassert>
@@ -26,11 +28,13 @@ bool isBig(const int &x) { return x > 50; }
 template <class V> struct Mirror {
     const V &view;
     std::map<Index, int> model; // index -> value snapshot
+    bool relocated = false;     // seen in a delta since last reset
     explicit Mirror(const V &v) : view(v) {
         for (auto it = v.begin(); it != v.end(); ++it)
             model[it.index()] = *it;
     }
     void onDelta(const typename V::Delta &d) {
+        relocated |= d.relocated;
         // Swaps first, in order; the other members describe what follows
         for (const auto &[a, b] : d.swapped) {
             auto na = model.extract(a), nb = model.extract(b);
@@ -261,6 +265,11 @@ class SwapSource : public Broadcaster<SlotDelta<Index>> {
         m_items[i] = v;
         m_diff.modify(i);
     }
+    // Items do not really move; a relocation only tests forwarding
+    void relocate() {
+        record();
+        m_diff.relocate();
+    }
     void swap(Index a, Index b) {
         record();
         m_diff.swap(a, b);
@@ -309,7 +318,8 @@ struct CountedEven {
 /**
  * Random toggles, modifications and swaps through two nested filters (one
  * read every round, one only now and then, so it folds swaps); rounds of
- * swaps alone must not call the predicate
+ * swaps alone must not call the predicate. Random relocations must reach
+ * both filters' listeners exactly when they happened since their last read
  */
 void checkSwaps(std::mt19937 &rng) {
     static_assert(Original<SwapSource> && SlotViewable<SwapSource>);
@@ -330,8 +340,13 @@ void checkSwaps(std::mt19937 &rng) {
     evens->addInterests(SlotInterest::ALL);
     bigEvens->addInterests(SlotInterest::ALL);
 
+    bool relocatedForBig = false;
     for (int round = 0; round < 2000; ++round) {
         const bool swapsOnly = rng() % 3 == 0;
+        const bool relocated = rng() % 8 == 0;
+        if (relocated)
+            src->relocate();
+        relocatedForBig |= relocated;
         const long calls = CountedEven::calls;
         // Bulk rounds spread changes over many words, for the word path
         const int ops = int(rng() % (round % 7 ? 8 : 400));
@@ -348,9 +363,13 @@ void checkSwaps(std::mt19937 &rng) {
         }
         pull(*evens);
         me.check();
+        assert(me.relocated == relocated);
+        me.relocated = false;
         if (rng() % 4 == 0) {
             pull(*bigEvens);
             mb.check();
+            assert(mb.relocated == relocatedForBig);
+            mb.relocated = relocatedForBig = false;
             for (auto &[i, v] : ms.model)
                 assert(mb.model.count(i) == (v % 2 == 0 && isBig(v)));
         }
@@ -368,6 +387,60 @@ void checkSwaps(std::mt19937 &rng) {
     bigEvens->removeInterests(SlotInterest::ALL);
 }
 
+/**
+ * The order tools against the standard algorithms: a merge must give a
+ * sorted multiset of both inputs and keep every element before the position
+ * it reports, and
+ * a permutation applied by swaps must place every element and use at most
+ * one swap per moved element
+ */
+void checkOrderTools(std::mt19937 &rng) {
+    for (int round = 0; round < 2000; ++round) {
+        const std::size_t n = rng() % 40, k = rng() % 10;
+        std::vector<int> out(n + k), batch(k);
+        // Few distinct values, so equal elements are common
+        for (std::size_t i = 0; i < n; ++i)
+            out[i] = int(rng() % 16);
+        for (int &x : batch)
+            x = int(rng() % 16);
+        std::sort(out.begin(), out.begin() + std::ptrdiff_t(n));
+        std::sort(batch.begin(), batch.end());
+        const std::vector<int> before(out.begin(),
+                                      out.begin() + std::ptrdiff_t(n));
+        const std::size_t p = mergeSortedBack(
+            std::span<int>(out), n, std::span<const int>(batch), std::less<>{});
+        std::vector<int> expected = before;
+        expected.insert(expected.end(), batch.begin(), batch.end());
+        std::sort(expected.begin(), expected.end());
+        assert(out == expected);
+        assert(p <= n);
+        for (std::size_t i = 0; i < p; ++i)
+            assert(out[i] == before[i]);
+
+        std::vector<Index> to(n);
+        for (std::size_t i = 0; i < n; ++i)
+            to[i] = Index(i);
+        std::shuffle(to.begin(), to.end(), rng);
+        std::vector<int> items(n), moved(n);
+        for (std::size_t i = 0; i < n; ++i)
+            items[i] = int(i);
+        for (std::size_t i = 0; i < n; ++i)
+            moved[to[i]] = items[i];
+        std::size_t fixed = 0, swaps = 0;
+        for (std::size_t i = 0; i < n; ++i)
+            fixed += to[i] == i;
+        permuteBySwaps(std::span<Index>(to), Index(0), [&](Index a, Index b) {
+            assert(a != b);
+            std::swap(items[a], items[b]);
+            ++swaps;
+        });
+        assert(items == moved);
+        assert(swaps <= n - fixed);
+        for (std::size_t i = 0; i < n; ++i)
+            assert(to[i] == i);
+    }
+}
+
 struct Big {
     char bytes[100000]; // larger than a chunk: one cell per chunk
 };
@@ -380,6 +453,7 @@ int main() {
     std::mt19937 rng(42);
     checkFolding(rng);
     checkSwaps(rng);
+    checkOrderTools(rng);
     auto store = std::make_shared<Store>();
     Ledger ledger;
     auto evens = ledger.get(Filter{From{store}, isEven});

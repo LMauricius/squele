@@ -58,13 +58,25 @@ Useful:
 
 Subtask:
 - [Task] Relocation flag in SlotDelta
+  ---
+  done: true
+  ---
   `SlotDelta::relocated` and `SlotDiff::relocate()`, with `fold`, `empty` and `clear`. `SlotStore` never sets it; `SlotFilterView` forwards it, eager or lazy. The fuzz test relocates at random and checks the flag reaches every level.
 - [Task] QueryCallable concept
-  Move the key rules of `FilterPredicate` (pointer, empty type, or comparable and hashable) into a shared concept with equality and hash helpers, so `Filter` and `Sort` key their callables the same way. `FilterPredicate` becomes `QueryCallable` plus `std::predicate`; `Filter` uses the helpers.
+  ---
+  done: true
+  ---
+  Move the key rules of `FilterPredicate` (pointer, empty type, or comparable and hashable) into a shared concept with equality and hash helpers (`bits/callable.hpp`: `callableEqual`, `combineCallableHash`), so `Filter` and `Sort` key their callables the same way. `FilterPredicate` becomes `QueryCallable` plus `std::predicate`; `Filter` uses the helpers.
 - [Task] ListViewable and OrderedViewable concepts
+  ---
+  done: true
+  ---
   Both concepts in `core/concepts.hpp`, with `SlotViewable` refining `ListViewable`, and the density and order contracts of `OrderedViewable` documented.
 - [Task] Order merge and permutation tools
-  Two small tools in `bits/`: a backward in-place merge of a sorted batch into a sorted dense array (binary search per batch item, block moves), and a cycle walk that turns old-to-new positions into swaps (one visited bit per position). Both are tested alone.
+  ---
+  done: true
+  ---
+  Two small tools in `bits/`: a backward in-place merge of a sorted batch into a sorted dense array (binary search per batch item, block moves), and a cycle walk that turns old-to-new positions into swaps (it swaps the permutation entries along, so it needs no visited bits and leaves the identity). Both are tested alone (`checkOrderTools`).
 - [Task] Sort query and ArraySortView
   `Sort<Q, Cmp>` (equality, `std::hash`, CTAD) and `ArraySortView` with the general path: full sort on construction and on every source flush, the all-modified output, and the `OrderedViewable` interface. A slot source already gets index entries, `m_rank`, the swap remap and the pointer refresh on `relocated`; every other change re-sorts fully for now.
 

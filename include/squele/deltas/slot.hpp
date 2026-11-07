@@ -127,7 +127,8 @@ struct SlotWordChange {
  * Flags naming the members of `SlotDelta` a listener reads, one bit per
  * member. A listener adds them to its source (`addInterests`), and the source
  * fills only the members someone asked for; the rest stay empty.
- * `activeCount`, `slotCount` and `touchedCount` are always filled.
+ * `activeCount`, `slotCount`, `touchedCount` and `relocated` are always
+ * filled.
  * `SPARSE_SPANS` asks for the four index spans only while the delta is
  * `sparse()`: a listener that handles dense deltas through the bit members
  * adds it instead of the four span flags, so a source with only such listeners
@@ -156,6 +157,7 @@ inline constexpr Mask ALL = 0xFF;
  *   updating per-slot flags 64 at a time.
  * Both forms describe the changes after the `swapped` ones: a listener first
  * applies the swaps, in order, to its state at the last flush.
+ * `relocated` tells whether item addresses read earlier stay valid.
  * @note Every index appears in at most one span. Spans are *unordered*; a
  * consumer that needs index order walks the touched words instead.
  * @note A member is filled only while some listener has its `SlotInterest`
@@ -189,6 +191,13 @@ template <std::integral TIndexT> struct SlotDelta {
      * whether or not `words` is filled)
      */
     IndexT touchedCount;
+
+    /**
+     * All or nothing: when true, every item address read before this delta
+     * is invalid; when false, every one stays valid, except those of the
+     * items this delta lists as created, replaced or swapped. Always filled
+     */
+    bool relocated;
 
     /**
      * @returns whether the changes are sparse: below 2 per touched word, where
@@ -297,6 +306,12 @@ template <std::integral TIndexT> class SlotDiff {
     void modifyWord(std::size_t w, BitWord m) { touch(w, m).modify(m); }
 
     /**
+     * Records that every item may have moved to a new address (see
+     * `SlotDelta::relocated`)
+     */
+    void relocate() noexcept { m_relocated = true; }
+
+    /**
      * Appends the changes of `d` (taken from the same view after the changes
      * already here): afterwards this diff holds the net change of both, as
      * if every change of `d` had been recorded here. O(touched words of `d`).
@@ -322,6 +337,7 @@ template <std::integral TIndexT> class SlotDiff {
             const SlotWordChange &later = d.words[at];
             touch(at, later.touched).fold(later);
         }
+        m_relocated |= d.relocated;
     }
 
     /**
@@ -337,6 +353,7 @@ template <std::integral TIndexT> class SlotDiff {
         d.activeCount = activeCount;
         d.slotCount = slotCount;
         d.touchedCount = static_cast<IndexT>(m_touchedCount);
+        d.relocated = m_relocated;
         if (wanted & SI::WORDS)
             d.words = m_words;
         if (wanted & SI::TOUCHED_WORDS)
@@ -431,14 +448,17 @@ template <std::integral TIndexT> class SlotDiff {
         m_touchedWords.clear();
         m_swaps.clear();
         m_touchedCount = 0;
+        m_relocated = false;
     }
 
     /**
      * @returns true when nothing was recorded since the last clear()
      * @note A create followed by an erase of the same index still counts as
-     * recorded; its delta is just empty. So does a swap
+     * recorded; its delta is just empty. So do a swap and a relocation
      */
-    bool empty() const { return m_touchedWords.empty() && m_swaps.empty(); }
+    bool empty() const {
+        return m_touchedWords.empty() && m_swaps.empty() && !m_relocated;
+    }
 
   private:
     static std::size_t word(IndexT i) {
@@ -573,6 +593,7 @@ template <std::integral TIndexT> class SlotDiff {
     std::vector<typename DeltaT::Swap> m_swaps;
     // The number of touched bits
     std::size_t m_touchedCount = 0;
+    bool m_relocated = false;
     // Output buffers that delta() spans over (two spans each, from both
     // ends); their size is only a capacity
     std::vector<IndexT> m_spansA, m_spansB;
