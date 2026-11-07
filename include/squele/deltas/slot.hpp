@@ -157,7 +157,8 @@ inline constexpr Mask ALL = 0xFF;
  *   updating per-slot flags 64 at a time.
  * Both forms describe the changes after the `swapped` ones: a listener first
  * applies the swaps, in order, to its state at the last flush.
- * `relocated` tells whether item addresses read earlier stay valid.
+ * An item keeps its address unless it is created, replaced or swapped, or
+ * `relocated` is set; a modified item keeps it too.
  * @note Every index appears in at most one span. Spans are *unordered*; a
  * consumer that needs index order walks the touched words instead.
  * @note A member is filled only while some listener has its `SlotInterest`
@@ -224,7 +225,8 @@ template <std::integral TIndexT> struct SlotDelta {
     std::span<const IndexT> replaced;
 
     /**
-     * Indices whose item changed in place; references stay valid
+     * Indices whose item changed in place; its address stays the same (a
+     * new address is reported as replaced)
      */
     std::span<const IndexT> modified;
 

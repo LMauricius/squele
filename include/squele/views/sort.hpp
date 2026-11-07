@@ -111,8 +111,9 @@ namespace squele {
  *
  * Two paths, picked at compile time:
  * - General (any `ListViewable` source): its delta is not understood, so
- *   every source flush re-sorts everything, and every position is reported
- *   modified, with `relocated` set.
+ *   every source flush re-sorts everything. A position whose item address
+ *   is unchanged is reported modified, one with a new address replaced, so
+ *   `relocated` is never set.
  * - Slot (a `SlotViewable` source): each position also holds its source
  *   index. Source swaps only remap indices; changed items are taken out,
  *   sorted alone and merged back; the reordering is reported as swaps, so a
@@ -247,9 +248,12 @@ class ArraySortView
         // Collect the entries by iterating the source (slot path: with
         // it.index()), std::sort them by less()
         // Slot path: fill m_rank (npos for free indices)
-        // Record (with listeners): every old position below the new count
-        // modified, the tail created or erased (word level), and relocate():
-        // the item at a position is not the one there before
+        // Record (with listeners), word level: below both counts, a position
+        // with the same address is modified, one with a new address replaced
+        // (erase + create), built as two masks per word without branches; the
+        // tail is created or erased. The old pointers are compared as
+        // integers (std::bit_cast to std::uintptr_t) before being
+        // overwritten, never dereferenced
         // setTaken(new count)
     }
 
