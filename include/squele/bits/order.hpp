@@ -3,6 +3,7 @@
 #define H_INCLUDED_SQUELE_BITS_ORDER
 
 #include <algorithm>
+#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <iterator>
@@ -14,10 +15,11 @@ namespace squele {
 /**
  * Merges the sorted `batch` into the sorted first `n` elements of `out`, in
  * place from the back. A sort view needs it to re-sort only its changed
- * items: O(k log n) comparisons and O(n - p) moves for k batch elements,
- * instead of a full sort.
- * A batch element goes after its equals already in `out` (an upper bound), so
- * fewer elements move.
+ * items: O(n - p + k) moves for k batch elements, and O(k log n) comparisons
+ * for a small batch (a binary search per element) or O(n - p + k) for a large
+ * one (a linear merge), whichever is fewer; never more than a full sort.
+ * A batch element goes after its equals already in `out`, so fewer elements
+ * move, and the order of the first `n` elements among themselves is kept.
  * @param out `n` sorted elements, then `batch.size()` elements to overwrite
  * @param batch sorted by `less`
  * @returns the first position whose element changed (`n` if `batch` is empty)
@@ -25,9 +27,24 @@ namespace squele {
 template <class T, class TLess>
 std::size_t mergeSortedBack(std::span<T> out, std::size_t n,
                             std::span<const T> batch, TLess less) {
-    // Largest batch element first: it lands past every element it does not
-    // precede, and the search range shrinks to the elements left before it
     std::size_t end = n;
+    // Large batch: a linear merge from the back; an element of `out` moves
+    // only past batch elements that precede it
+    if (batch.size() * static_cast<std::size_t>(std::bit_width(n)) >= n) {
+        for (std::size_t j = batch.size(); j > 0;) {
+            if (end > 0 && less(batch[j - 1], out[end - 1])) {
+                out[end + j - 1] = std::move(out[end - 1]);
+                --end;
+            } else {
+                --j;
+                out[end + j] = batch[j];
+            }
+        }
+        return end;
+    }
+    // Small batch: largest element first, so it lands past every element it
+    // does not precede, and the search range shrinks to the elements left
+    // before it
     for (std::size_t j = batch.size(); j-- > 0;) {
         const auto at = static_cast<std::size_t>(
             std::upper_bound(out.begin(), out.begin() + end, batch[j], less) -

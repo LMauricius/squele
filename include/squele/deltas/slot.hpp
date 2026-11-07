@@ -183,7 +183,10 @@ template <std::integral TIndexT> struct SlotDelta {
     IndexT count;
 
     /**
-     * One past the largest index that may be taken
+     * One past the largest index that may be taken, and past every index this
+     * delta touches. A view that shrinks (a dense view freeing its last
+     * positions) applies the shrink only after the delta: it reports its
+     * largest count since the last flush here, and the smaller one in `count`
      */
     IndexT slotCount;
 

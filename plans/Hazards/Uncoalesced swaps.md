@@ -1,8 +1,11 @@
 # [Hazard] Uncoalesced swaps
 `SlotDiff` keeps every swap recorded between two flushes as its own entry, and every listener replays the list in order. Swapping the same pair back and forth, or reordering many items through swaps (a sort), grows the list with each call.
 
+`ArraySortView` records at most one swap per moved position for each source delta it applies, but its own diff keeps the swaps of every delta applied since its last flush, and a shift moves every later position (see [Hazard] Position shifts in sort views).
+
 Useful:
 - [Note] Deltas and Diffs
+- [Note] Ordered views
 
 ## Severity
 

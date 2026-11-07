@@ -7,7 +7,7 @@ A *Diff* is self-sufficient: it owns the changes accumulated between flushes, co
 
 A view with nothing to report notifies nobody on `flush()`; this keeps repeated pulls cheap.
 
-For slots, "one past the largest index that may be taken" (`slotCount`) is used instead of "largest index", which has no valid value for an empty view.
+For slots, "one past the largest index that may be taken" (`slotCount`) is used instead of "largest index", which has no valid value for an empty view. A delta's `slotCount` also covers every index the delta touches. A view that shrinks (a dense sort view, whose last positions become free) applies the shrink only after the delta: the erases of the freed positions are listed in the delta, its `slotCount` is the largest count since the last flush, and the new size shows in `count` and in the view's own `slotCount()`. The largest count is needed, not the count at the last flush: a view that grows and then shrinks between two flushes touches positions above both.
 
 A Delta may carry several forms of the same changes (for example index spans and bit masks). A form is added only when some listener gets faster with it, and each listener reads whichever form is cheapest for its work. A form may be replaced by a cheaper one that carries the same information.
 

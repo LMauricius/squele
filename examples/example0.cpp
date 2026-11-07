@@ -2,7 +2,7 @@
 // See example1.cpp for listeners, deltas and memory release.
 
 #include "squele/core/ledger.hpp"
-#include "squele/views/filter.hpp"
+#include "squele/queries/filter.hpp"
 #include "squele/views/slotStore.hpp"
 
 #include <cstdio>

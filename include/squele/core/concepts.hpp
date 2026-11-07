@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace squele {
 
@@ -125,12 +126,15 @@ concept Original =
  * - `count()`: the number of items.
  */
 template <class T>
-concept ListViewable = Viewable<T> && requires(const T &t) {
-    typename T::Item;
-    { *t.begin() } -> std::same_as<const typename T::Item &>;
-    { t.begin() == t.end() } -> std::convertible_to<bool>;
-    { t.count() } -> std::integral;
-};
+concept ListViewable =
+    Viewable<T> &&
+    requires(const T &t, decltype(std::declval<const T &>().begin()) it) {
+        typename T::Item;
+        { *it } -> std::same_as<const typename T::Item &>;
+        ++it;
+        { it == t.end() } -> std::convertible_to<bool>;
+        { t.count() } -> std::integral;
+    };
 
 /**
  * A view whose items are accessed by sparse, reusable indices.
