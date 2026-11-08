@@ -2,7 +2,7 @@
 ---
 done: true
 ---
-Slot views keep their "taken" flags in `std::vector<bool>` (`SlotIndexPool::m_taken`, `FilterView::m_pass`) and read them one bit at a time. `SlotIterator::skipFree` calls `isTaken(i)` for every index, free or taken, and each call does a bounds check plus a shift and mask through the `std::vector<bool>` proxy. `FilterView::onDelta` reads and writes one pass bit per changed index, and updates `m_count` one transition at a time.
+Slot views keep their "taken" flags in `std::vector<bool>` (`SlotIndexPool::m_taken`, `SlotFilterView::m_pass`) and read them one bit at a time. `SlotIterator::skipFree` calls `isTaken(i)` for every index, free or taken, and each call does a bounds check plus a shift and mask through the `std::vector<bool>` proxy. `SlotFilterView::onDelta` reads and writes one pass bit per changed index, and updates `m_count` one transition at a time.
 
 Useful:
 - [Note] Slot storage
@@ -17,7 +17,7 @@ Useful:
 
 ## Possible efforts
 
-- `std::vector<bool>` does not expose its words, so word-level code needs its own small bitset in `bits/` (a `std::vector<std::uint64_t>` plus the bit count). `SlotIndexPool` and `FilterView` would both switch to it.
+- `std::vector<bool>` does not expose its words, so word-level code needs its own small bitset in `bits/` (a `std::vector<std::uint64_t>` plus the bit count). `SlotIndexPool` and `SlotFilterView` would both switch to it.
 - `SlotIterator` would skip free slots a word at a time (`std::countr_zero` on the current word, masked below the start index). This needs the views to expose their bitset, or a "next taken index" member, which would extend the `SlotViewable` concept.
 - `onDelta` could compute transitions per word: with the old and new pass masks of a word, `created = new & ~old`, `deleted = old & ~new`, `kept = old & new`, and `count += popcount(new) - popcount(old)`. That requires grouping the changed indices by word first, either by bucketing the unordered spans or by having `SlotDelta` carry bitmasks instead of (or next to) index spans. The second option is simpler for listeners that work on words, and cheaper to produce from `SlotDiff`.
 - SIMD only helps once whole words are processed in bulk (the constructor scan, bulk deltas, `deleted` masks). The predicate is an opaque function pointer, so the predicate calls themselves cannot be vectorized.

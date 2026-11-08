@@ -1195,6 +1195,79 @@ void checkExtend(std::mt19937 &rng) {
     unlisten(*vecs, mv);
 }
 
+/**
+ * Regression: a deferring view applies folded deltas with the largest slot
+ * count among them, not the last one's. A sort that grows (an eager apply)
+ * and shrinks (a folded apply) within one flush reports swaps up to its
+ * peak position, and its next delta has a smaller slot count; views over it
+ * that defer across both must not index past their bookkeeping.
+ */
+void checkDeferredSlotCount() {
+    auto store = std::make_shared<Store>();
+    std::vector<Index> live;
+    for (int v = 10; v < 35; ++v)
+        live.push_back(store->emplace(v));
+    Ledger ledger;
+    const Sort<From<Store>> up{From{store}};
+    auto sorted = ledger.get(up);
+    auto evens = ledger.get(Filter{up, isEven});
+    auto down = ledger.get(Sort{up, Greater{}});
+    auto twice = ledger.get(Map{up, CountedTwice{}});
+    auto ext = ledger.get(Extend{up, CountedTwice{}});
+    Mirror<decltype(evens)::element_type> me(*evens);
+    Mirror<decltype(down)::element_type> md(*down);
+    Mirror<decltype(twice)::element_type> mt(*twice);
+    Mirror<decltype(ext)::element_type> mx(*ext);
+    auto listen = [](auto &view, auto &mirror) {
+        view.addListener(&mirror);
+        view.addInterests(SlotInterest::ALL);
+    };
+    auto unlisten = [](auto &view, auto &mirror) {
+        view.removeListener(&mirror);
+        view.removeInterests(SlotInterest::ALL);
+    };
+    listen(*evens, me);
+    listen(*down, md);
+    listen(*twice, mt);
+    listen(*ext, mx);
+
+    // 1. Any change, so the views below receive a delta and stop reading
+    // eagerly (they are not synced until the end)
+    store->modify(live[3]) = 11;
+    pull(*sorted);
+    // 2. The sort grows to 26 eagerly, then folds an erase at the front: its
+    // delta reports swaps up to position 25 with slot count 26
+    live.push_back(store->emplace(1000));
+    pull(*store);
+    store->erase(live[0]);
+    pull(*sorted);
+    // 3. A later delta with slot count 25
+    store->modify(live[5]) = 12;
+    pull(*sorted);
+
+    pull(*evens);
+    pull(*down);
+    pull(*twice);
+    pull(*ext);
+    me.check();
+    md.check();
+    mt.check();
+    mx.check();
+    std::multiset<int> values;
+    for (auto it = store->begin(); it != store->end(); ++it)
+        values.insert(*it);
+    checkOrdered(*down, values);
+    for (Index q = 0; q < sorted->count(); ++q) {
+        assert(me.model.count(q) == isEven((*sorted)[q]));
+        assert(mt.model.at(q) == 2 * (*sorted)[q] + 1);
+        assert(mx.model.at(q).first == &(*sorted)[q]);
+    }
+    unlisten(*evens, me);
+    unlisten(*down, md);
+    unlisten(*twice, mt);
+    unlisten(*ext, mx);
+}
+
 struct Big {
     char bytes[100000]; // larger than a chunk: one cell per chunk
 };
@@ -1215,6 +1288,7 @@ int main() {
     checkMapSlot(rng);
     checkMapGeneral(rng);
     checkExtend(rng);
+    checkDeferredSlotCount();
     auto store = std::make_shared<Store>();
     Ledger ledger;
     auto evens = ledger.get(Filter{From{store}, isEven});

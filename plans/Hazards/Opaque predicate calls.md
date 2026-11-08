@@ -2,7 +2,7 @@
 ---
 done: true
 ---
-`Filter` holds its predicate as a function pointer, so the query stays comparable and hashable. Every check in `FilterView` is therefore an indirect call the compiler cannot inline or vectorize, and the work around it (bit updates, recording) cannot be hoisted across it.
+`Filter` holds its predicate as a function pointer, so the query stays comparable and hashable. Every check in `SlotFilterView` is therefore an indirect call the compiler cannot inline or vectorize, and the work around it (bit updates, recording) cannot be hoisted across it.
 
 Useful:
 - [Note] Query keys
