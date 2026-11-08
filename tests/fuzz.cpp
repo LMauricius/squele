@@ -3,7 +3,9 @@
 // model. Asserts are the checks; build without NDEBUG.
 #include "squele/bits/order.hpp"
 #include "squele/core/ledger.hpp"
+#include "squele/queries/extend.hpp"
 #include "squele/queries/filter.hpp"
+#include "squele/queries/map.hpp"
 #include "squele/queries/sort.hpp"
 #include "squele/views/slotStore.hpp"
 
@@ -17,6 +19,8 @@
 #include <random>
 #include <set>
 #include <span>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 using namespace squele;
@@ -30,9 +34,9 @@ bool isBig(const int &x) { return x > 50; }
 // flush, and that item addresses change only where the delta allows it
 template <class V> struct Mirror {
     const V &view;
-    std::map<Index, int> model;          // index -> value snapshot
-    std::map<Index, const void *> addrs; // index -> item address
-    bool relocated = false;              // seen in a delta since last reset
+    std::map<Index, typename V::Item> model; // index -> value snapshot
+    std::map<Index, const void *> addrs;     // index -> item address
+    bool relocated = false;                  // seen in a delta since last reset
     explicit Mirror(const V &v) : view(v) {
         for (auto it = v.begin(); it != v.end(); ++it) {
             model[it.index()] = *it;
@@ -133,7 +137,7 @@ template <class V> struct Mirror {
             assert(!((bits.words()[i / bitWordBits] >> (i % bitWordBits)) & 1));
     }
     void check() const {
-        std::map<Index, int> actual;
+        std::map<Index, typename V::Item> actual;
         for (auto it = view.begin(); it != view.end(); ++it)
             actual[it.index()] = *it;
         assert(actual == model);
@@ -736,6 +740,461 @@ void checkSortGeneral(std::mt19937 &rng) {
     sorted->removeInterests(SlotInterest::ALL);
 }
 
+// Counts its calls, to check that a map computes only changed items
+struct CountedTwice {
+    static inline long calls = 0;
+    int operator()(const int &x) const { return ++calls, 2 * x + 1; }
+};
+struct LastDigit {
+    int operator()(const int &x) const { return x % 10; }
+};
+struct SameInt {
+    bool operator()(int a, int b) const { return a == b; }
+};
+
+/**
+ * `recomputeResult` reports a change always for a plain function, and only
+ * on a different result for a compared one; compared keys compare and hash
+ * by both callables
+ */
+void checkResultTools() {
+    int r = 3;
+    assert(recomputeResult(LastDigit{}, r, 13) && r == 3);
+    const ComparedResult digit{SameInt{}, LastDigit{}};
+    assert(!recomputeResult(digit, r, 23) && r == 3);
+    assert(recomputeResult(digit, r, 24) && r == 4);
+    static_assert(ResultFunction<std::remove_const_t<decltype(digit)>, int> &&
+                  std::same_as<ResultOf<decltype(digit), int>, int>);
+    using Ptr = ComparedResult<bool (*)(int, int), int (*)(const int &)>;
+    static_assert(KeyCallable<Ptr>);
+    auto same = [](int a, int b) { return a == b; };
+    const Ptr a{+same, +[](const int &x) { return x; }};
+    const Ptr b{+same, +[](const int &x) { return -x; }};
+    assert(a == a && !(a == b));
+    assert(std::hash<Ptr>{}(a) == std::hash<Ptr>{}(Ptr{a}));
+}
+
+/**
+ * Maps over a store, over a filter (compared results, read now and then so
+ * it defers) and over a `SwapSource`, plus a filter and a sort over a map.
+ * Every result must equal the function of its source item; swaps alone call
+ * nothing; a round calls the function at most once per change; and a map
+ * never relocates
+ */
+void checkMapSlot(std::mt19937 &rng) {
+    auto store = std::make_shared<Store>();
+    std::vector<Index> live;
+    for (int k = 0; k < 300; ++k)
+        live.push_back(store->emplace(int(rng() % 100)));
+    constexpr Index n = 300;
+    auto src = std::make_shared<SwapSource>(n);
+    for (Index i = 0; i < n; i += 2)
+        src->toggle(i, int(rng() % 100));
+
+    Ledger ledger;
+    auto twice = ledger.get(Map{From{store}, CountedTwice{}});
+    auto digits = ledger.get(Map{Filter{From{store}, isEven},
+                                 ComparedResult{SameInt{}, LastDigit{}}});
+    auto oddTwice = ledger.get(Filter{Map{From{store}, CountedTwice{}},
+                                      [](const int &x) { return x % 4 == 1; }});
+    auto sorted = ledger.get(Sort{Map{From{store}, CountedTwice{}}});
+    auto swapped = ledger.get(Map{From{src}, CountedTwice{}});
+    static_assert(SlotViewable<decltype(twice)::element_type>);
+    assert(ledger.get(Map{From{store}, CountedTwice{}}) == twice);
+
+    Mirror<Store> ms(*store);
+    Mirror<SwapSource> mw(*src);
+    Mirror<decltype(twice)::element_type> mt(*twice);
+    Mirror<decltype(digits)::element_type> md(*digits);
+    Mirror<decltype(oddTwice)::element_type> mo(*oddTwice);
+    Mirror<decltype(swapped)::element_type> mx(*swapped);
+    auto listen = [](auto &view, auto &mirror) {
+        view.addListener(&mirror);
+        view.addInterests(SlotInterest::ALL);
+    };
+    auto unlisten = [](auto &view, auto &mirror) {
+        view.removeListener(&mirror);
+        view.removeInterests(SlotInterest::ALL);
+    };
+    listen(*store, ms);
+    listen(*src, mw);
+    listen(*twice, mt);
+    listen(*digits, md);
+    listen(*oddTwice, mo);
+    listen(*swapped, mx);
+
+    for (int round = 0; round < 1500; ++round) {
+        // Store side; `twice` is read every round, so it is eager
+        const int ops = int(rng() % (round % 7 ? 6 : 200));
+        for (int k = 0; k < ops; ++k) {
+            const int op = int(rng() % 3);
+            if (op == 0 || live.empty()) {
+                live.push_back(store->emplace(int(rng() % 100)));
+                continue;
+            }
+            const std::size_t at = rng() % live.size();
+            if (op == 1) {
+                store->erase(live[at]);
+                live[at] = live.back();
+                live.pop_back();
+            } else {
+                store->modify(live[at]) = int(rng() % 100);
+            }
+        }
+        const long calls = CountedTwice::calls;
+        pull(*twice);
+        assert(CountedTwice::calls - calls <= ops);
+        assert(!mt.relocated);
+        for (const auto &[i, v] : ms.model)
+            assert(mt.model.at(i) == 2 * v + 1);
+        assert(mt.model.size() == ms.model.size());
+        if (round % 3 == 0) {
+            pull(*digits);
+            std::map<Index, int> expected;
+            for (const auto &[i, v] : ms.model)
+                if (isEven(v))
+                    expected[i] = v % 10;
+            assert(md.model == expected);
+        }
+        if (round % 4 == 0) {
+            pull(*oddTwice);
+            for (const auto &[i, v] : ms.model)
+                assert(mo.model.count(i) == ((2 * v + 1) % 4 == 1));
+        }
+        if (round % 5 == 0) {
+            pull(*sorted);
+            std::multiset<int> expected;
+            for (const auto &[i, v] : ms.model)
+                expected.insert(2 * v + 1);
+            checkOrdered(*sorted, expected);
+        }
+
+        // Swap side: swaps and relocations of the source
+        const bool swapsOnly = rng() % 3 == 0;
+        if (rng() % 8 == 0)
+            src->relocate();
+        const int sops = int(rng() % (round % 7 ? 8 : 300));
+        for (int k = 0; k < sops; ++k) {
+            const Index i = Index(rng() % n), j = Index(rng() % n);
+            const int op = swapsOnly ? 0 : int(rng() % 3);
+            if (op == 0) {
+                if (i != j)
+                    src->swap(i, j);
+            } else if (op == 1 || !src->isTaken(i))
+                src->toggle(i, int(rng() % 100));
+            else
+                src->modify(i, int(rng() % 100));
+        }
+        const long scalls = CountedTwice::calls;
+        pull(*swapped);
+        assert(CountedTwice::calls - scalls <= (swapsOnly ? 0 : sops));
+        assert(!mx.relocated);
+        assert(mx.model.size() == mw.model.size());
+        for (const auto &[i, v] : mw.model)
+            assert(mx.model.at(i) == 2 * v + 1);
+    }
+
+    // Compared results: a modification that keeps the last digit is not
+    // reported, one that changes it is
+    pull(*digits);
+    const auto even = std::find_if(
+        live.begin(), live.end(), [&](Index i) { return isEven((*store)[i]); });
+    assert(even != live.end());
+    struct Count {
+        int n = 0;
+        void onDelta(const decltype(digits)::element_type::Delta &) { ++n; }
+    } count;
+    digits->addListener(&count);
+    store->modify(*even) = (*store)[*even] % 10 + 20;
+    pull(*digits);
+    assert(count.n == 0);
+    store->modify(*even) = ((*store)[*even] + 2) % 100;
+    pull(*digits);
+    assert(count.n == 1);
+    digits->removeListener(&count);
+    pull(*digits);
+    md.check();
+
+    unlisten(*store, ms);
+    unlisten(*src, mw);
+    unlisten(*twice, mt);
+    unlisten(*digits, md);
+    unlisten(*oddTwice, mo);
+    unlisten(*swapped, mx);
+}
+
+/**
+ * The general path: a map over a `VecSource` recomputes on every change,
+ * at dense positions, and is read only now and then, so it also defers
+ */
+void checkMapGeneral(std::mt19937 &rng) {
+    auto src = std::make_shared<VecSource>();
+    for (int k = 0; k < 100; ++k)
+        src->push(int(rng() % 30));
+    Ledger ledger;
+    auto twice = ledger.get(Map{From{src}, CountedTwice{}});
+    static_assert(SlotViewable<decltype(twice)::element_type>);
+    Mirror<decltype(twice)::element_type> mt(*twice);
+    twice->addListener(&mt);
+    twice->addInterests(SlotInterest::ALL);
+    for (int round = 0; round < 1000; ++round) {
+        const int ops = int(rng() % 6);
+        for (int k = 0; k < ops; ++k) {
+            const int op = int(rng() % 3);
+            if (op == 0 || src->count() == 0)
+                src->push(int(rng() % 30));
+            else if (op == 1)
+                src->eraseAt(rng() % src->count());
+            else
+                src->set(rng() % src->count(), int(rng() % 30));
+        }
+        if (rng() % 3 == 0) {
+            src->flush();
+            continue;
+        }
+        twice->sync();
+        twice->flush();
+        assert(!mt.relocated);
+        assert(twice->count() == twice->slotCount());
+        assert(twice->count() == src->count());
+        for (Index q = 0; q < twice->count(); ++q)
+            assert(mt.model.at(q) == 2 * src->items()[q] + 1);
+    }
+    twice->removeListener(&mt);
+    twice->removeInterests(SlotInterest::ALL);
+}
+
+struct Sum {
+    int operator()(const int &a, const int &b) const { return a + b; }
+};
+// A named item: the members in argument order
+struct Row {
+    const int *up;
+    int sum;
+    const int *down;
+    bool operator==(const Row &) const = default;
+};
+
+/**
+ * Pointers to the items of `views`, walked side by side until the shortest
+ * ends: what a combined view must hold at each position
+ */
+template <class... V>
+std::vector<std::tuple<const typename V::Item *...>>
+sideBySide(const V &...views) {
+    std::vector<std::tuple<const typename V::Item *...>> out;
+    auto its = std::tuple{views.begin()...};
+    [&]<std::size_t... K>(std::index_sequence<K...>) {
+        while (((std::get<K>(its) != views.end()) && ...)) {
+            out.emplace_back(&*std::get<K>(its)...);
+            (++std::get<K>(its), ...);
+        }
+    }(std::index_sequence_for<V...>{});
+    return out;
+}
+
+/**
+ * Extends of every path over one store, each checked after random rounds
+ * against the sources walked side by side:
+ * - index path with dense sources: two sorts zipped, a named `Row` with a
+ *   function between them, and sorts of different counts;
+ * - index path with one sparse source: a store with a counted function, a
+ *   sort with one (its swaps move items, so they call nothing), and a
+ *   `SwapSource` with swaps and relocations;
+ * - general path: a store zipped with itself (two tags on one source), a
+ *   filter with a store, and two `VecSource`s with a function.
+ */
+void checkExtend(std::mt19937 &rng) {
+    auto store = std::make_shared<Store>();
+    std::vector<Index> live;
+    for (int k = 0; k < 200; ++k)
+        live.push_back(store->emplace(int(rng() % 30)));
+    constexpr Index n = 200;
+    auto src = std::make_shared<SwapSource>(n);
+    for (Index i = 0; i < n; i += 2)
+        src->toggle(i, int(rng() % 30));
+    auto va = std::make_shared<VecSource>(), vb = std::make_shared<VecSource>();
+    for (int k = 0; k < 50; ++k) {
+        va->push(int(rng() % 30));
+        vb->push(int(rng() % 30));
+    }
+
+    Ledger ledger;
+    using Up = Sort<From<Store>>;
+    using Down = Sort<From<Store>, Greater>;
+    const Up up{From{store}};
+    const Down down{From{store}, Greater{}};
+    const Sort evensUp{Filter{From{store}, isEven}};
+    auto zip = ledger.get(Extend{up, down});
+    auto rows = ledger.get(Extend<Row, Up, Sum, Down>{up, Sum{}, down});
+    auto uneven = ledger.get(Extend{up, evensUp});
+    auto twice = ledger.get(Extend{From{store}, CountedTwice{}});
+    auto sortedTwice = ledger.get(Extend{up, CountedTwice{}});
+    auto swapped = ledger.get(Extend{From{src}, CountedTwice{}});
+    auto self = ledger.get(Extend{From{store}, From{store}});
+    auto mixed = ledger.get(Extend{Filter{From{store}, isEven}, From{store}});
+    auto vecs = ledger.get(Extend{From{va}, Sum{}, From{vb}});
+    static_assert(std::same_as<decltype(zip)::element_type::Item,
+                               std::pair<const int *, const int *>> &&
+                  std::same_as<decltype(vecs)::element_type::Item,
+                               std::tuple<const int *, int, const int *>>);
+    assert(ledger.get(Extend{up, down}) == zip);
+    auto pUp = ledger.get(up);
+    auto pDown = ledger.get(down);
+    auto pEvensUp = ledger.get(evensUp);
+    auto pMixed = ledger.get(Filter{From{store}, isEven});
+
+    Mirror<Store> ms(*store);
+    Mirror<SwapSource> mw(*src);
+    Mirror<decltype(zip)::element_type> mz(*zip);
+    Mirror<decltype(rows)::element_type> mr(*rows);
+    Mirror<decltype(uneven)::element_type> mu(*uneven);
+    Mirror<decltype(twice)::element_type> mt(*twice);
+    Mirror<decltype(sortedTwice)::element_type> mo(*sortedTwice);
+    Mirror<decltype(swapped)::element_type> mx(*swapped);
+    Mirror<decltype(self)::element_type> mf(*self);
+    Mirror<decltype(mixed)::element_type> mm(*mixed);
+    Mirror<decltype(vecs)::element_type> mv(*vecs);
+    auto listen = [](auto &view, auto &mirror) {
+        view.addListener(&mirror);
+        view.addInterests(SlotInterest::ALL);
+    };
+    auto unlisten = [](auto &view, auto &mirror) {
+        view.removeListener(&mirror);
+        view.removeInterests(SlotInterest::ALL);
+    };
+    listen(*store, ms);
+    listen(*src, mw);
+    listen(*zip, mz);
+    listen(*rows, mr);
+    listen(*uneven, mu);
+    listen(*twice, mt);
+    listen(*sortedTwice, mo);
+    listen(*swapped, mx);
+    listen(*self, mf);
+    listen(*mixed, mm);
+    listen(*vecs, mv);
+
+    // Positions hold the sources' items side by side
+    auto checkZip = [](const auto &mirror, const auto &expected, auto toItem) {
+        assert(mirror.model.size() == expected.size());
+        for (std::size_t q = 0; q < expected.size(); ++q)
+            assert(mirror.model.at(Index(q)) == toItem(expected[q]));
+    };
+    auto pairOf = [](const auto &t) {
+        return std::pair{std::get<0>(t), std::get<1>(t)};
+    };
+
+    int opsSinceSorted = 0; // store changes since `sortedTwice` was read
+    for (int round = 0; round < 1000; ++round) {
+        const int ops = int(rng() % (round % 7 ? 6 : 150));
+        opsSinceSorted += ops;
+        for (int k = 0; k < ops; ++k) {
+            const int op = int(rng() % 3);
+            if (op == 0 || live.empty()) {
+                live.push_back(store->emplace(int(rng() % 30)));
+                continue;
+            }
+            const std::size_t at = rng() % live.size();
+            if (op == 1) {
+                store->erase(live[at]);
+                live[at] = live.back();
+                live.pop_back();
+            } else {
+                store->modify(live[at]) = int(rng() % 30);
+            }
+        }
+        long calls = CountedTwice::calls;
+        pull(*twice);
+        assert(CountedTwice::calls - calls <= ops);
+        assert(mt.model.size() == ms.model.size());
+        for (const auto &[i, v] : ms.model)
+            assert(mt.model.at(i) == std::pair(&(*store)[i], 2 * v + 1));
+        pull(*zip);
+        checkZip(mz, sideBySide(*pUp, *pDown), pairOf);
+        if (round % 2 == 0) {
+            pull(*rows);
+            checkZip(mr, sideBySide(*pUp, *pDown), [](const auto &t) {
+                const auto [a, b] = t;
+                return Row{a, *a + *b, b};
+            });
+        }
+        if (round % 3 == 0) {
+            pull(*uneven);
+            checkZip(mu, sideBySide(*pUp, *pEvensUp), pairOf);
+        }
+        if (round % 2 == 1) {
+            calls = CountedTwice::calls;
+            pull(*sortedTwice);
+            assert(CountedTwice::calls - calls <= opsSinceSorted);
+            opsSinceSorted = 0;
+            checkZip(mo, sideBySide(*pUp), [](const auto &t) {
+                return std::pair(std::get<0>(t), 2 * *std::get<0>(t) + 1);
+            });
+        }
+        if (round % 4 == 0) {
+            pull(*self);
+            checkZip(mf, sideBySide(*store, *store), pairOf);
+        }
+        if (round % 5 == 0) {
+            pull(*mixed);
+            checkZip(mm, sideBySide(*pMixed, *store), pairOf);
+        }
+
+        // SwapSource: swaps, toggles, modifications and relocations
+        const bool swapsOnly = rng() % 3 == 0;
+        if (rng() % 8 == 0)
+            src->relocate();
+        const int sops = int(rng() % (round % 7 ? 8 : 200));
+        for (int k = 0; k < sops; ++k) {
+            const Index i = Index(rng() % n), j = Index(rng() % n);
+            const int op = swapsOnly ? 0 : int(rng() % 3);
+            if (op == 0) {
+                if (i != j)
+                    src->swap(i, j);
+            } else if (op == 1 || !src->isTaken(i))
+                src->toggle(i, int(rng() % 30));
+            else
+                src->modify(i, int(rng() % 30));
+        }
+        pull(*swapped);
+        assert(!mx.relocated);
+        assert(mx.model.size() == mw.model.size());
+        for (const auto &[i, v] : mw.model)
+            assert(mx.model.at(i) == std::pair(&(*src)[i], 2 * v + 1));
+
+        // VecSources: the general path with a function
+        for (int k = int(rng() % 4); k > 0; --k) {
+            auto &v = rng() % 2 ? *va : *vb;
+            const int op = int(rng() % 3);
+            if (op == 0 || v.count() == 0)
+                v.push(int(rng() % 30));
+            else if (op == 1)
+                v.eraseAt(rng() % v.count());
+            else
+                v.set(rng() % v.count(), int(rng() % 30));
+        }
+        if (rng() % 3 == 0) {
+            pull(*vecs);
+            checkZip(mv, sideBySide(*va, *vb), [](const auto &t) {
+                const auto [a, b] = t;
+                return std::tuple(a, *a + *b, b);
+            });
+        }
+    }
+    unlisten(*store, ms);
+    unlisten(*src, mw);
+    unlisten(*zip, mz);
+    unlisten(*rows, mr);
+    unlisten(*uneven, mu);
+    unlisten(*twice, mt);
+    unlisten(*sortedTwice, mo);
+    unlisten(*swapped, mx);
+    unlisten(*self, mf);
+    unlisten(*mixed, mm);
+    unlisten(*vecs, mv);
+}
+
 struct Big {
     char bytes[100000]; // larger than a chunk: one cell per chunk
 };
@@ -752,6 +1211,10 @@ int main() {
     checkSortSlot(rng);
     checkSortSwaps(rng);
     checkSortGeneral(rng);
+    checkResultTools();
+    checkMapSlot(rng);
+    checkMapGeneral(rng);
+    checkExtend(rng);
     auto store = std::make_shared<Store>();
     Ledger ledger;
     auto evens = ledger.get(Filter{From{store}, isEven});

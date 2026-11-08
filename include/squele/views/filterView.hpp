@@ -11,6 +11,7 @@
 #include "squele/deltas/slot.hpp"
 #include "squele/queries/filter.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <memory>
@@ -100,7 +101,9 @@ class FilterView : public Broadcaster<typename TSourceT::Delta> {
             apply(d);
         } else {
             m_pending.fold(d);
-            m_pendingSlotCount = d.slotCount;
+            // The largest since the last apply: an earlier folded delta
+            // may name indices past a later one's slot count
+            m_pendingSlotCount = std::max(m_pendingSlotCount, d.slotCount);
         }
         m_readSinceDelta = false;
     }
@@ -129,6 +132,7 @@ class FilterView : public Broadcaster<typename TSourceT::Delta> {
                 // pending changes; only slots that still hold an item are read
                 apply(m_pending.delta(0, m_pendingSlotCount, sourceInterests));
                 m_pending.clear();
+                m_pendingSlotCount = 0;
             }
             m_dirty = false;
         }

@@ -2,6 +2,8 @@
 #ifndef H_INCLUDED_SQUELE_COMPONENTS_BROADCASTER
 #define H_INCLUDED_SQUELE_COMPONENTS_BROADCASTER
 
+#include "squele/core/concepts.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -14,9 +16,9 @@ namespace squele {
 
 /**
  * Mixin that stores listeners and sends them deltas, without virtual calls.
- * A listener is anything with `onDelta(const DeltaT &)` (see `Listening`) and
- * optionally `onDirty()` (dependent views need it; plain consumers do not); it
- * inherits nothing.
+ * A listener is anything with `onDelta(const DeltaT &)` or `onDelta(const
+ * DeltaT &, ListenerTag)` (see `Listening`) and optionally `onDirty()`
+ * (dependent views need it; plain consumers do not); it inherits nothing.
  * @warning Adding or removing listeners from inside a listener call is UB: it
  * invalidates the broadcast loop.
  * @warning Listeners are stored as raw pointers: remove a listener before it
@@ -36,18 +38,24 @@ template <class TDeltaT> class Broadcaster {
     /**
      * Adds a listener. A listener added n times is notified n times.
      * @param p_l the listener; must be removed exactly as many times as added,
-     * through a pointer of the same type
+     * through a pointer of the same type and with the same tag
+     * @param tag passed back to `onDelta(d, tag)` when the listener takes it
      */
     template <class L>
-        requires requires(L &l, const DeltaT &d) { l.onDelta(d); }
-    void addListener(L *p_l) {
+        requires requires(L &l, const DeltaT &d) {
+            l.onDelta(d);
+        } || requires(L &l, const DeltaT &d, ListenerTag t) { l.onDelta(d, t); }
+    void addListener(L *p_l, ListenerTag tag = 0) {
         // Captureless lambdas decay to function pointers that cast the object
         // back to L: no vtable in L, no allocation per entry
         Entry e{p_l,
-                [](void *p_obj, const DeltaT &d) {
-                    static_cast<L *>(p_obj)->onDelta(d);
+                [](void *p_obj, const DeltaT &d, ListenerTag t) {
+                    if constexpr (requires(L &l) { l.onDelta(d, t); })
+                        static_cast<L *>(p_obj)->onDelta(d, t);
+                    else
+                        static_cast<L *>(p_obj)->onDelta(d);
                 },
-                nullptr};
+                nullptr, tag};
         if constexpr (requires(L &l) { l.onDirty(); })
             e.p_onDirty = [](void *p_obj) {
                 static_cast<L *>(p_obj)->onDirty();
@@ -56,14 +64,14 @@ template <class TDeltaT> class Broadcaster {
     }
 
     /**
-     * Removes *one* entry of the listener
+     * Removes *one* entry of the listener with this tag
      * @warning Removing a listener that was not added is UB (asserted)
      */
-    template <class L> void removeListener(L *p_l) {
+    template <class L> void removeListener(L *p_l, ListenerTag tag = 0) {
         void *const p_obj = p_l;
-        const auto it =
-            std::find_if(m_listeners.begin(), m_listeners.end(),
-                         [&](const Entry &e) { return e.p_obj == p_obj; });
+        const auto it = std::find_if(
+            m_listeners.begin(), m_listeners.end(),
+            [&](const Entry &e) { return e.p_obj == p_obj && e.tag == tag; });
         assert(it != m_listeners.end());
         if (it != m_listeners.end())
             m_listeners.erase(it);
@@ -118,7 +126,7 @@ template <class TDeltaT> class Broadcaster {
      */
     void broadcast(const DeltaT &d) const {
         for (const Entry &e : m_listeners)
-            e.p_onDelta(e.p_obj, d);
+            e.p_onDelta(e.p_obj, d, e.tag);
     }
 
     /**
@@ -132,13 +140,14 @@ template <class TDeltaT> class Broadcaster {
 
   private:
     /**
-     * A type-erased listener: the object and thunks that cast it back.
-     * `p_onDirty` is null for listeners without `onDirty()`.
+     * A type-erased listener: the object, thunks that cast it back, and its
+     * tag. `p_onDirty` is null for listeners without `onDirty()`.
      */
     struct Entry {
         void *p_obj;
-        void (*p_onDelta)(void *, const DeltaT &);
+        void (*p_onDelta)(void *, const DeltaT &, ListenerTag);
         void (*p_onDirty)(void *);
+        ListenerTag tag;
     };
 
     std::vector<Entry> m_listeners;

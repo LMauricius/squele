@@ -17,6 +17,13 @@ class Ledger;
 template <class TViewT> class From;
 
 /**
+ * A number a listener chooses when it adds itself to a source, and receives
+ * back with each delta (`onDelta(d, tag)`), so a view listening to several
+ * sources (possibly of one type, or one source twice) knows which one sent it
+ */
+using ListenerTag = std::uint32_t;
+
+/**
  * Has `flush()`, which sends the changes since the last flush to listeners.
  * @note Call `flush()` only when the contents are consistent: listeners read
  * the flushing object while handling its delta.
@@ -51,8 +58,10 @@ template <class TDeltaT> struct ListenerArchetype {
  * Accepts listeners of `T::Delta`, without dictating how it stores them
  * (`Broadcaster` is one way).
  * - `T::Delta`: sent to listeners; valid only during the call.
- * - `addListener(p_l)`/`removeListener(p_l)`: for any listener `L` with
- *   `onDelta(const T::Delta &)` (`onDirty()` is optional).
+ * - `addListener(p_l, tag)`/`removeListener(p_l, tag)`: for any listener
+ *   `L` with `onDelta(const T::Delta &)` or `onDelta(const T::Delta &,
+ *   ListenerTag)` (`onDirty()` is optional). The tag defaults to 0; the
+ *   second form receives it back.
  * - `hasListeners()`: whether anyone listens.
  * - `addInterests(m)`/`removeInterests(m)`: count interests in the
  *   `T::Delta::Interests` flags `m`; only members someone is interested in
@@ -64,6 +73,8 @@ concept Listenable = requires(T &t, const T &ct,
                               typename T::Delta::Interests m) {
     t.addListener(p_l);
     t.removeListener(p_l);
+    t.addListener(p_l, ListenerTag{});
+    t.removeListener(p_l, ListenerTag{});
     { ct.hasListeners() } -> std::same_as<bool>;
     t.addInterests(m);
     t.removeInterests(m);
@@ -98,11 +109,15 @@ concept Queryable = std::copyable<T> && std::equality_comparable<T> &&
  * pointer.
  */
 template <class L, class S>
-concept Listening = requires(L &l, S &s, const typename S::Delta &d) {
-    l.onDelta(d);
-    s.addListener(&l);
-    s.removeListener(&l);
-};
+concept Listening =
+    (requires(L &l, const typename S::Delta &d) { l.onDelta(d); } ||
+     requires(L &l, const typename S::Delta &d, ListenerTag tag) {
+         l.onDelta(d, tag);
+     }) &&
+    requires(L &l, S &s, ListenerTag tag) {
+        s.addListener(&l, tag);
+        s.removeListener(&l, tag);
+    };
 
 /**
  * `V` is a view derived from the source `S`: it listens to `S` (including its

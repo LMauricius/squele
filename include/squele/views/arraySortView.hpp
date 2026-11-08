@@ -125,7 +125,10 @@ class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
                 apply(d);
             } else {
                 m_slot.pending.fold(d);
-                m_slot.pendingSlotCount = d.slotCount;
+                // The largest since the last apply: an earlier folded delta
+                // may name indices past a later one's slot count
+                m_slot.pendingSlotCount =
+                    std::max(m_slot.pendingSlotCount, d.slotCount);
             }
         } else {
             if (m_readSinceDelta && !m_general.resortDue)
@@ -162,6 +165,7 @@ class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
                     apply(m_slot.pending.delta(0, m_slot.pendingSlotCount,
                                                sourceInterests));
                     m_slot.pending.clear();
+                    m_slot.pendingSlotCount = 0;
                 }
             } else if (m_general.resortDue) {
                 sortAll();
