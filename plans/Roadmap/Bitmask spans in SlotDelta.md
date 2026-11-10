@@ -35,7 +35,7 @@ Blocks:
 ---
 done: true
 ---
-`bits/slotBits.hpp` with two classes:
+`bits/indexBits.hpp` with two classes:
 - `BitSpan`: a read-only view (word pointer plus bit count) with `test(i)`, `words()` and `nextSet(i)` (the first set bit at or after `i`, through `std::countr_zero` on the word masked below `i`).
 - `BitVector`: the owning storage, with 64-byte aligned words, word count rounded up to a multiple of 8, and padding bits always zero. It has `set`, `reset`, `resize`, `push_back` and converts to `BitSpan`. `resize` gives the strong exception guarantee.
 

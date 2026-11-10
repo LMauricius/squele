@@ -102,7 +102,7 @@ template <class V> struct Mirror {
         std::set<Index> touched, words;
         for (Index w : d.touchedWords) {
             assert(words.insert(w).second);
-            const SlotWordChange &c = d.words[w];
+            const IndexWordChange &c = d.words[w];
             // Every plane is a subset of touched; same of existed & exists
             assert(!((c.existed | c.exists) & ~c.touched));
             assert(!(c.same & ~(c.existed & c.exists)));
@@ -112,7 +112,7 @@ template <class V> struct Mirror {
                 const Index i = Index(w * bitWordBits + b);
                 touched.insert(i);
                 assert(i < d.slotCount);
-                assert(inSpans.count(i) == (c.kind(b) != SlotChange::nothing));
+                assert(inSpans.count(i) == (c.kind(b) != IndexChange::nothing));
             }
         }
         assert(touched.size() == d.touchedCount);
@@ -122,13 +122,13 @@ template <class V> struct Mirror {
             return d.words[i / bitWordBits].kind(i % bitWordBits);
         };
         for (Index i : d.created)
-            assert(kindOf(i) == SlotChange::created);
+            assert(kindOf(i) == IndexChange::created);
         for (Index i : d.deleted)
-            assert(kindOf(i) == SlotChange::deleted);
+            assert(kindOf(i) == IndexChange::deleted);
         for (Index i : d.replaced)
-            assert(kindOf(i) == SlotChange::replaced);
+            assert(kindOf(i) == IndexChange::replaced);
         for (Index i : d.modified)
-            assert(kindOf(i) == SlotChange::modified);
+            assert(kindOf(i) == IndexChange::modified);
     }
     // Bits past size() must stay zero; word-level code relies on it
     static void checkPadding(BitSpan bits) {
@@ -156,7 +156,7 @@ template <class V> struct Mirror {
  */
 void checkCoalescing() {
     enum Op { C, E, M };
-    using K = SlotChange;
+    using K = IndexChange;
     struct Case {
         std::vector<Op> ops;
         K kind;
@@ -170,12 +170,12 @@ void checkCoalescing() {
         {{C, E, C}, K::created},
     };
     for (const Case &c : cases) {
-        SlotDiff<Index> diff;
+        IndexDiff<Index> diff;
         for (Op op : c.ops)
             op == C   ? diff.create(70)
             : op == E ? diff.erase(70)
                       : diff.modify(70);
-        const auto d = diff.delta(0, 128, SlotInterest::ALL);
+        const auto d = diff.delta(0, 128, IndexInterest::ALL);
         assert(d.touchedCount == 1 && d.touchedWords.size() == 1);
         assert(d.words[1].kind(6) == c.kind);
         const std::size_t spans = d.created.size() + d.deleted.size() +
@@ -191,7 +191,7 @@ void checkCoalescing() {
  */
 void checkFolding(std::mt19937 &rng) {
     constexpr Index n = 300;
-    SlotDiff<Index> whole, part, folded;
+    IndexDiff<Index> whole, part, folded;
     std::vector<bool> taken(n);
     for (int step = 0; step < 5000; ++step) {
         const Index i = Index(rng() % n);
@@ -212,23 +212,24 @@ void checkFolding(std::mt19937 &rng) {
             both([&](auto &d) { d.modify(i); });
         }
         if (rng() % 16 == 0) {
-            folded.fold(part.delta(0, n, SlotInterest::ALL));
+            folded.fold(part.delta(0, n, IndexInterest::ALL));
             part.clear();
         }
         if (rng() % 512 == 0) {
-            folded.fold(part.delta(0, n, SlotInterest::ALL));
+            folded.fold(part.delta(0, n, IndexInterest::ALL));
             part.clear();
-            const auto a = whole.delta(0, n, SlotInterest::ALL);
-            const auto b = folded.delta(0, n, SlotInterest::ALL);
+            const auto a = whole.delta(0, n, IndexInterest::ALL);
+            const auto b = folded.delta(0, n, IndexInterest::ALL);
             assert(a.touchedCount == b.touchedCount);
             // Swaps may leave listed words empty, so the lists may differ;
             // the blocks may not
-            auto block = [](std::span<const SlotWordChange> ws, std::size_t w) {
-                return w < ws.size() ? ws[w] : SlotWordChange{};
+            auto block = [](std::span<const IndexWordChange> ws,
+                            std::size_t w) {
+                return w < ws.size() ? ws[w] : IndexWordChange{};
             };
             for (std::size_t w = 0; w < n / bitWordBits + 1; ++w) {
-                const SlotWordChange x = block(a.words, w),
-                                     y = block(b.words, w);
+                const IndexWordChange x = block(a.words, w),
+                                      y = block(b.words, w);
                 assert(x.touched == y.touched && x.existed == y.existed &&
                        x.exists == y.exists && x.same == y.same);
             }
@@ -262,11 +263,11 @@ template <class T> void checkStableItems(int n) {
  * A test-only original that swaps items (no real view does yet): a fixed
  * number of slots, each toggled between free and taken by hand
  */
-class SwapSource : public Broadcaster<SlotDelta<Index>> {
+class SwapSource : public Broadcaster<IndexDelta<Index>> {
   public:
     using Item = int;
     using Index = ::Index;
-    using Delta = SlotDelta<Index>;
+    using Delta = IndexDelta<Index>;
     using Query = From<SwapSource>;
     using Iterator = SlotIterator<SwapSource>;
 
@@ -330,7 +331,7 @@ class SwapSource : public Broadcaster<SlotDelta<Index>> {
 
     std::vector<int> m_items;
     BitVector m_taken;
-    SlotDiff<Index> m_diff;
+    IndexDiff<Index> m_diff;
 };
 
 // Counts its calls, to check that swaps never re-check an item
@@ -360,9 +361,9 @@ void checkSwaps(std::mt19937 &rng) {
     src->addListener(&ms);
     evens->addListener(&me);
     bigEvens->addListener(&mb);
-    src->addInterests(SlotInterest::ALL);
-    evens->addInterests(SlotInterest::ALL);
-    bigEvens->addInterests(SlotInterest::ALL);
+    src->addInterests(IndexInterest::ALL);
+    evens->addInterests(IndexInterest::ALL);
+    bigEvens->addInterests(IndexInterest::ALL);
 
     bool relocatedForBig = false;
     for (int round = 0; round < 2000; ++round) {
@@ -406,9 +407,9 @@ void checkSwaps(std::mt19937 &rng) {
     src->removeListener(&ms);
     evens->removeListener(&me);
     bigEvens->removeListener(&mb);
-    src->removeInterests(SlotInterest::ALL);
-    evens->removeInterests(SlotInterest::ALL);
-    bigEvens->removeInterests(SlotInterest::ALL);
+    src->removeInterests(IndexInterest::ALL);
+    evens->removeInterests(IndexInterest::ALL);
+    bigEvens->removeInterests(IndexInterest::ALL);
 }
 
 /**
@@ -525,11 +526,11 @@ void checkSortSlot(std::mt19937 &rng) {
     Mirror<decltype(upEvens)::element_type> mf(*upEvens);
     auto listen = [](auto &view, auto &mirror) {
         view.addListener(&mirror);
-        view.addInterests(SlotInterest::ALL);
+        view.addInterests(IndexInterest::ALL);
     };
     auto unlisten = [](auto &view, auto &mirror) {
         view.removeListener(&mirror);
-        view.removeInterests(SlotInterest::ALL);
+        view.removeInterests(IndexInterest::ALL);
     };
     listen(*store, ms);
     listen(*up, mu);
@@ -601,9 +602,9 @@ void checkSortSwaps(std::mt19937 &rng) {
     src->addListener(&ms);
     sorted->addListener(&mo);
     evens->addListener(&me);
-    src->addInterests(SlotInterest::ALL);
-    sorted->addInterests(SlotInterest::ALL);
-    evens->addInterests(SlotInterest::ALL);
+    src->addInterests(IndexInterest::ALL);
+    sorted->addInterests(IndexInterest::ALL);
+    evens->addInterests(IndexInterest::ALL);
 
     for (int round = 0; round < 1500; ++round) {
         const bool swapsOnly = rng() % 3 == 0;
@@ -642,9 +643,9 @@ void checkSortSwaps(std::mt19937 &rng) {
     src->removeListener(&ms);
     sorted->removeListener(&mo);
     evens->removeListener(&me);
-    src->removeInterests(SlotInterest::ALL);
-    sorted->removeInterests(SlotInterest::ALL);
-    evens->removeInterests(SlotInterest::ALL);
+    src->removeInterests(IndexInterest::ALL);
+    sorted->removeInterests(IndexInterest::ALL);
+    evens->removeInterests(IndexInterest::ALL);
 }
 
 // The delta of `VecSource`: it says only that something changed
@@ -712,7 +713,7 @@ void checkSortGeneral(std::mt19937 &rng) {
     static_assert(OrderedViewable<decltype(sorted)::element_type>);
     Mirror<decltype(sorted)::element_type> mo(*sorted);
     sorted->addListener(&mo);
-    sorted->addInterests(SlotInterest::ALL);
+    sorted->addInterests(IndexInterest::ALL);
     for (int round = 0; round < 1000; ++round) {
         const int ops = int(rng() % 6);
         for (int k = 0; k < ops; ++k) {
@@ -737,7 +738,7 @@ void checkSortGeneral(std::mt19937 &rng) {
                                                  src->items().end()));
     }
     sorted->removeListener(&mo);
-    sorted->removeInterests(SlotInterest::ALL);
+    sorted->removeInterests(IndexInterest::ALL);
 }
 
 // Counts its calls, to check that a map computes only changed items
@@ -810,11 +811,11 @@ void checkMapSlot(std::mt19937 &rng) {
     Mirror<decltype(swapped)::element_type> mx(*swapped);
     auto listen = [](auto &view, auto &mirror) {
         view.addListener(&mirror);
-        view.addInterests(SlotInterest::ALL);
+        view.addInterests(IndexInterest::ALL);
     };
     auto unlisten = [](auto &view, auto &mirror) {
         view.removeListener(&mirror);
-        view.removeInterests(SlotInterest::ALL);
+        view.removeInterests(IndexInterest::ALL);
     };
     listen(*store, ms);
     listen(*src, mw);
@@ -936,7 +937,7 @@ void checkMapGeneral(std::mt19937 &rng) {
     static_assert(SlotViewable<decltype(twice)::element_type>);
     Mirror<decltype(twice)::element_type> mt(*twice);
     twice->addListener(&mt);
-    twice->addInterests(SlotInterest::ALL);
+    twice->addInterests(IndexInterest::ALL);
     for (int round = 0; round < 1000; ++round) {
         const int ops = int(rng() % 6);
         for (int k = 0; k < ops; ++k) {
@@ -961,7 +962,7 @@ void checkMapGeneral(std::mt19937 &rng) {
             assert(mt.model.at(q) == 2 * src->items()[q] + 1);
     }
     twice->removeListener(&mt);
-    twice->removeInterests(SlotInterest::ALL);
+    twice->removeInterests(IndexInterest::ALL);
 }
 
 struct Sum {
@@ -1057,11 +1058,11 @@ void checkExtend(std::mt19937 &rng) {
     Mirror<decltype(vecs)::element_type> mv(*vecs);
     auto listen = [](auto &view, auto &mirror) {
         view.addListener(&mirror);
-        view.addInterests(SlotInterest::ALL);
+        view.addInterests(IndexInterest::ALL);
     };
     auto unlisten = [](auto &view, auto &mirror) {
         view.removeListener(&mirror);
-        view.removeInterests(SlotInterest::ALL);
+        view.removeInterests(IndexInterest::ALL);
     };
     listen(*store, ms);
     listen(*src, mw);
@@ -1220,11 +1221,11 @@ void checkDeferredSlotCount() {
     Mirror<decltype(ext)::element_type> mx(*ext);
     auto listen = [](auto &view, auto &mirror) {
         view.addListener(&mirror);
-        view.addInterests(SlotInterest::ALL);
+        view.addInterests(IndexInterest::ALL);
     };
     auto unlisten = [](auto &view, auto &mirror) {
         view.removeListener(&mirror);
-        view.removeInterests(SlotInterest::ALL);
+        view.removeInterests(IndexInterest::ALL);
     };
     listen(*evens, me);
     listen(*down, md);
@@ -1318,11 +1319,11 @@ int main() {
     bigEvens->addListener(&mb);
     bigs->addListener(&mg);
     thirds->addListener(&mt);
-    thirds->addInterests(SlotInterest::ALL);
-    bigs->addInterests(SlotInterest::ALL);
-    store->addInterests(SlotInterest::ALL);
-    evens->addInterests(SlotInterest::ALL);
-    bigEvens->addInterests(SlotInterest::ALL);
+    thirds->addInterests(IndexInterest::ALL);
+    bigs->addInterests(IndexInterest::ALL);
+    store->addInterests(IndexInterest::ALL);
+    evens->addInterests(IndexInterest::ALL);
+    bigEvens->addInterests(IndexInterest::ALL);
 
     // A bulk start spreads indices over several words, so both onDelta paths
     // (per index and per word) run
@@ -1386,17 +1387,17 @@ int main() {
     pull(*bigs);
     mg.check();
     bigs->removeListener(&mg);
-    bigs->removeInterests(SlotInterest::ALL);
+    bigs->removeInterests(IndexInterest::ALL);
     bigs.reset();
     thirds->removeListener(&mt);
-    thirds->removeInterests(SlotInterest::ALL);
+    thirds->removeInterests(IndexInterest::ALL);
     thirds.reset();
     store->removeListener(&ms);
     evens->removeListener(&me);
     bigEvens->removeListener(&mb);
-    store->removeInterests(SlotInterest::ALL);
-    evens->removeInterests(SlotInterest::ALL);
-    bigEvens->removeInterests(SlotInterest::ALL);
+    store->removeInterests(IndexInterest::ALL);
+    evens->removeInterests(IndexInterest::ALL);
+    bigEvens->removeInterests(IndexInterest::ALL);
 
     // collect chain: dropping bigEvens frees it and evens after 2 passes
     std::weak_ptr<decltype(evens)::element_type> we = evens;
@@ -1409,7 +1410,7 @@ int main() {
     // per flag, and only interesting members are filled. The delta is read
     // inside the call: its spans die with the flush
     {
-        namespace SI = SlotInterest;
+        namespace SI = IndexInterest;
         struct Rec {
             Index e = 0;
             int n = 0;
@@ -1424,7 +1425,7 @@ int main() {
                 const std::size_t w = e / bitWordBits;
                 touchedE =
                     w < d.words.size() &&
-                    d.words[w].kind(e % bitWordBits) != SlotChange::untouched;
+                    d.words[w].kind(e % bitWordBits) != IndexChange::untouched;
             }
         } rec;
         store->addListener(&rec);

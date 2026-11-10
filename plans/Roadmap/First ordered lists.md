@@ -5,7 +5,7 @@ done: true
 Let slot deltas describe swaps of two indices, and let `SlotFilterView` follow a swap by swapping its pass bits instead of calling the predicate again. No view swaps items yet; ordered views will be the first. A filter applies every swap of its source to itself as well, since it reuses the source's indices.
 
 Decisions:
-- A swap is a transposition `{a, b}` of two indices; either one may be free in a view (a filter swaps a passing item with a failing one). `SlotDelta::moved` and `Move{from, to}` became `swapped` and `Swap{a, b}`, and `SlotInterest::MOVED` became `SWAPPED`.
+- A swap is a transposition `{a, b}` of two indices; either one may be free in a view (a filter swaps a passing item with a failing one). `SlotDelta::moved` and `Move{from, to}` became `swapped` and `Swap{a, b}`, and `IndexInterest::MOVED` became `SWAPPED`.
 - `swapped` is ordered and applied first, to the state at the last flush. The spans and word blocks then describe the changes after the swaps. A swap is not counted in `touchedCount`.
 - `SlotDiff::swap(a, b)` swaps the four plane bits of `a` and `b`, so the changes recorded before the swap follow their items, and appends `{a, b}` to an ordered list. Swaps are not coalesced: k swaps give k entries.
 - `SlotDiff::fold` applies the later delta's swaps to its planes (and appends them) before folding its words, so a lazy filter folds swaps like any other change.

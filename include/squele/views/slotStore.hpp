@@ -7,8 +7,8 @@
 #include "squele/bits/slotIndexPool.hpp"
 #include "squele/bits/slotIterator.hpp"
 #include "squele/components/broadcaster.hpp"
-#include "squele/core/from.hpp"
-#include "squele/deltas/slot.hpp"
+#include "squele/deltas/index.hpp"
+#include "squele/queries/from.hpp"
 
 #include <cassert>
 #include <concepts>
@@ -28,11 +28,11 @@ namespace squele {
  * made after it was added.
  */
 template <class TItemT, std::integral TIndexT = std::uint32_t>
-class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
+class SlotStore : public Broadcaster<IndexDelta<TIndexT>> {
   public:
     using Item = TItemT;
     using Index = TIndexT;
-    using Delta = SlotDelta<Index>;
+    using Delta = IndexDelta<Index>;
     using Query = From<SlotStore>;
     using Iterator = SlotIterator<SlotStore>;
 
@@ -142,7 +142,7 @@ class SlotStore : public Broadcaster<SlotDelta<TIndexT>> {
     // stay valid
     SlotChunks<SlotCell<Item>> m_cells;
     SlotIndexPool<Index> m_pool;
-    SlotDiff<Index> m_diff;
+    IndexDiff<Index> m_diff;
 };
 
 } // namespace squele

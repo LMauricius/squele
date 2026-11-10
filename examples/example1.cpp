@@ -85,8 +85,8 @@ int main() {
     Recorder rec;
     evens->addListener(&rec);
     // A listener asks for the delta members it reads; the rest stay empty
-    constexpr auto recorded = SlotInterest::CREATED | SlotInterest::DELETED |
-                              SlotInterest::REPLACED | SlotInterest::MODIFIED;
+    constexpr auto recorded = IndexInterest::CREATED | IndexInterest::DELETED |
+                              IndexInterest::REPLACED | IndexInterest::MODIFIED;
     evens->addInterests(recorded);
 
     // Brings the filter up to date (pulling the store) and flushes it

@@ -2,7 +2,7 @@
 #ifndef H_INCLUDED_SQUELE_CORE_CONCEPTS
 #define H_INCLUDED_SQUELE_CORE_CONCEPTS
 
-#include "squele/deltas/slot.hpp"
+#include "squele/deltas/index.hpp"
 
 #include <concepts>
 #include <cstddef>
@@ -166,7 +166,7 @@ concept ListViewable =
 template <class T>
 concept SlotViewable =
     ListViewable<T> && std::integral<typename T::Index> &&
-    std::same_as<typename T::Delta, SlotDelta<typename T::Index>> &&
+    std::same_as<typename T::Delta, IndexDelta<typename T::Index>> &&
     requires(const T &t, typename T::Index i) {
         typename T::Item;
         { t.isTaken(i) } -> std::same_as<bool>;

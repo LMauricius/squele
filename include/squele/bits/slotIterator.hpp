@@ -2,7 +2,7 @@
 #ifndef H_INCLUDED_SQUELE_BITS_SLOTITERATOR
 #define H_INCLUDED_SQUELE_BITS_SLOTITERATOR
 
-#include "squele/bits/slotBits.hpp"
+#include "squele/bits/indexBits.hpp"
 
 #include <bit>
 #include <cstddef>

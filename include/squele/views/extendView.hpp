@@ -2,15 +2,15 @@
 #ifndef H_INCLUDED_SQUELE_VIEWS_EXTENDVIEW
 #define H_INCLUDED_SQUELE_VIEWS_EXTENDVIEW
 
+#include "squele/bits/indexBits.hpp"
 #include "squele/bits/pull.hpp"
-#include "squele/bits/slotBits.hpp"
 #include "squele/bits/slotCell.hpp"
 #include "squele/bits/slotChunks.hpp"
 #include "squele/bits/slotIterator.hpp"
 #include "squele/components/broadcaster.hpp"
 #include "squele/core/concepts.hpp"
 #include "squele/core/ledger.hpp"
-#include "squele/deltas/slot.hpp"
+#include "squele/deltas/index.hpp"
 #include "squele/queries/extend.hpp"
 
 #include <algorithm>
@@ -43,7 +43,7 @@ struct NoExtendGeneralState {};
  * into a stable cell, so it keeps its address until it is created or
  * erased; a change of any source item at a position rebuilds that item and
  * calls every function again. It never sets `relocated`. It is
- * `SlotViewable` and reports its changes as `SlotDelta`s.
+ * `SlotViewable` and reports its changes as `IndexDelta`s.
  *
  * It listens to each source with the source's number as tag, and always
  * defers: a function reads every source, so nothing is rebuilt until
@@ -64,7 +64,7 @@ struct NoExtendGeneralState {};
  */
 template <class TItemT, class... TPartsT>
 class ExtendView
-    : public Broadcaster<SlotDelta<ViewIndex<
+    : public Broadcaster<IndexDelta<ViewIndex<
           std::tuple_element_t<0, detail::ExtendSourceViews<TPartsT...>>>>> {
     using SourceViews = detail::ExtendSourceViews<TPartsT...>;
     static constexpr std::size_t sourceCount = std::tuple_size_v<SourceViews>;
@@ -76,7 +76,7 @@ class ExtendView
         Extend<TItemT, typename detail::ExtendQueryPart<TPartsT>::type...>;
     using Item = typename Query::Item;
     using Index = ViewIndex<Source<0>>;
-    using Delta = SlotDelta<Index>;
+    using Delta = IndexDelta<Index>;
     using Iterator = SlotIterator<ExtendView>;
 
     /**
@@ -240,7 +240,7 @@ class ExtendView
      * last of them
      */
     template <class S> struct Pending {
-        SlotDiff<typename S::Index> diff;
+        IndexDiff<typename S::Index> diff;
         typename S::Index slotCount = 0;
     };
     struct IndexState {
@@ -262,9 +262,9 @@ class ExtendView
 
     // Index path: the words for folding and for the touched positions, and
     // the swaps
-    static constexpr SlotInterest::Mask sourceInterests =
-        SlotInterest::SWAPPED | SlotInterest::WORDS |
-        SlotInterest::TOUCHED_WORDS;
+    static constexpr IndexInterest::Mask sourceInterests =
+        IndexInterest::SWAPPED | IndexInterest::WORDS |
+        IndexInterest::TOUCHED_WORDS;
 
     /**
      * Calls `f.template operator()<K>()` for each source number `K`
@@ -441,7 +441,7 @@ class ExtendView
             }
             for (const auto w : d.touchedWords) {
                 const auto at = static_cast<std::size_t>(w);
-                const SlotWordChange &c = d.words[at];
+                const IndexWordChange &c = d.words[at];
                 if (!c.touched)
                     continue;
                 list(at);
@@ -565,7 +565,7 @@ class ExtendView
     std::vector<Ptrs> m_ptrs;           // per position: the pointers in it
     BitVector m_taken;
     Index m_count = 0;
-    SlotDiff<Index> m_diff;
+    IndexDiff<Index> m_diff;
     bool m_dirty = false;
 
     [[no_unique_address]] std::conditional_t<

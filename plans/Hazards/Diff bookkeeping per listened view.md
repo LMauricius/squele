@@ -1,5 +1,5 @@
 # [Hazard] Diff bookkeeping per listened view
-Every view with listeners owns a `SlotDiff`, whose change blocks (four words per 64 slots, half a byte per slot) grow to the highest index ever recorded, and never shrink. In a tree, each listened view pays this again over the same index space, on top of its own flags (`m_pass` for a filter).
+Every view with listeners owns an `IndexDiff`, whose change blocks (four words per 64 indices, half a byte per index) grow to the highest index ever recorded, and never shrink. In a tree, each listened view pays this again over the same index space, on top of its own flags (`m_pass` for a filter).
 
 Useful:
 - [Note] Deltas and Diffs

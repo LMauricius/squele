@@ -2,7 +2,7 @@
 #ifndef H_INCLUDED_SQUELE_BITS_SLOTINDEXPOOL
 #define H_INCLUDED_SQUELE_BITS_SLOTINDEXPOOL
 
-#include "squele/bits/slotBits.hpp"
+#include "squele/bits/indexBits.hpp"
 
 #include <cassert>
 #include <concepts>

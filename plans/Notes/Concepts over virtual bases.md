@@ -7,4 +7,4 @@ A view optimized for some source kinds (such as `SlotViewable` sources) stays on
 
 Virtual classes remain only where a concept cannot work: internal type erasure that must be iterated generically (the `Ledger`'s per-query-type caches).
 
-Prefer self-sufficient value types to builder or manager classes: the type that accumulates state also exposes the operations on it (see `SlotDiff`).
+Prefer self-sufficient value types to builder or manager classes: the type that accumulates state also exposes the operations on it (see `IndexDiff`).

@@ -2,16 +2,16 @@
 #ifndef H_INCLUDED_SQUELE_VIEWS_MAPVIEW
 #define H_INCLUDED_SQUELE_VIEWS_MAPVIEW
 
+#include "squele/bits/indexBits.hpp"
 #include "squele/bits/pull.hpp"
 #include "squele/bits/result.hpp"
-#include "squele/bits/slotBits.hpp"
 #include "squele/bits/slotCell.hpp"
 #include "squele/bits/slotChunks.hpp"
 #include "squele/bits/slotIterator.hpp"
 #include "squele/components/broadcaster.hpp"
 #include "squele/core/concepts.hpp"
 #include "squele/core/ledger.hpp"
-#include "squele/deltas/slot.hpp"
+#include "squele/deltas/index.hpp"
 #include "squele/queries/map.hpp"
 
 #include <algorithm>
@@ -39,7 +39,7 @@ struct NoMapGeneralState {};
  * The view of `Map`: the results of a function over each source item, owned
  * by the view in stable storage, so a result keeps its address until its
  * source item is created, replaced or erased. It never sets `relocated`. It
- * is `SlotViewable` and reports its changes as `SlotDelta`s.
+ * is `SlotViewable` and reports its changes as `IndexDelta`s.
  *
  * Two paths, picked at compile time:
  * - Slot (a `SlotViewable` source): the source's index space. A result sits
@@ -54,14 +54,14 @@ struct NoMapGeneralState {};
  * is read every cycle, and otherwise defers them to its next `sync()`.
  */
 template <ListViewable TSourceT, class TFnT>
-class MapView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
+class MapView : public Broadcaster<IndexDelta<ViewIndex<TSourceT>>> {
   public:
     using SourceT = TSourceT;
     using Fn = TFnT;
     using Query = Map<typename SourceT::Query, Fn>;
     using Item = ResultOf<Fn, typename SourceT::Item>;
     using Index = ViewIndex<SourceT>;
-    using Delta = SlotDelta<Index>;
+    using Delta = IndexDelta<Index>;
     using Iterator = SlotIterator<MapView>;
 
     /**
@@ -206,7 +206,7 @@ class MapView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
      * count at the last of them
      */
     struct SlotState {
-        SlotDiff<Index> pending;
+        IndexDiff<Index> pending;
         Index pendingSlotCount = 0;
     };
 
@@ -221,10 +221,11 @@ class MapView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
     // Slot path: the spans for the per-index steps, the swaps, and the words
     // for folding deferred deltas. Fixed, since every result needs every
     // change whatever this view's listeners want
-    static constexpr SlotInterest::Mask sourceInterests =
-        SlotInterest::CREATED | SlotInterest::DELETED | SlotInterest::REPLACED |
-        SlotInterest::MODIFIED | SlotInterest::SWAPPED | SlotInterest::WORDS |
-        SlotInterest::TOUCHED_WORDS;
+    static constexpr IndexInterest::Mask sourceInterests =
+        IndexInterest::CREATED | IndexInterest::DELETED |
+        IndexInterest::REPLACED | IndexInterest::MODIFIED |
+        IndexInterest::SWAPPED | IndexInterest::WORDS |
+        IndexInterest::TOUCHED_WORDS;
 
     /**
      * Computes every result from the source. The construction step of both
@@ -392,7 +393,7 @@ class MapView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
     SlotChunks<SlotCell<Item>> m_results; // per index; taken ones hold items
     BitVector m_taken; // own copy: the source's runs ahead while deferred
     Index m_count = 0;
-    SlotDiff<Index> m_diff;
+    IndexDiff<Index> m_diff;
     bool m_dirty = false;
     // Whether sync() ran since the last delta; a new view is about to be read
     bool m_readSinceDelta = true;

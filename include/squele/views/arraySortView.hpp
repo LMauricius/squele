@@ -2,14 +2,14 @@
 #ifndef H_INCLUDED_SQUELE_VIEWS_ARRAYSORTVIEW
 #define H_INCLUDED_SQUELE_VIEWS_ARRAYSORTVIEW
 
+#include "squele/bits/indexBits.hpp"
 #include "squele/bits/order.hpp"
 #include "squele/bits/pull.hpp"
-#include "squele/bits/slotBits.hpp"
 #include "squele/bits/slotIterator.hpp"
 #include "squele/components/broadcaster.hpp"
 #include "squele/core/concepts.hpp"
 #include "squele/core/ledger.hpp"
-#include "squele/deltas/slot.hpp"
+#include "squele/deltas/index.hpp"
 #include "squele/queries/sort.hpp"
 
 #include <algorithm>
@@ -61,7 +61,7 @@ constexpr BitWord rangeBits(std::size_t base, std::size_t lo, std::size_t hi) {
  * The view of `Sort`: the source's items in sorted order, at the dense
  * positions `0..count-1`. It owns no item copies: each position holds a
  * pointer to its source item. It is `OrderedViewable` (so `SlotViewable`),
- * and reports its changes as `SlotDelta`s.
+ * and reports its changes as `IndexDelta`s.
  *
  * Two paths, picked at compile time:
  * - General (any `ListViewable` source): its delta is not understood, so
@@ -79,13 +79,13 @@ constexpr BitWord rangeBits(std::size_t base, std::size_t lo, std::size_t hi) {
  * reports a swap for every later position.
  */
 template <ListViewable TSourceT, class TCmpT>
-class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
+class ArraySortView : public Broadcaster<IndexDelta<ViewIndex<TSourceT>>> {
   public:
     using SourceT = TSourceT;
     using Query = Sort<typename SourceT::Query, TCmpT>;
     using Item = typename SourceT::Item;
     using Index = ViewIndex<SourceT>;
-    using Delta = SlotDelta<Index>;
+    using Delta = IndexDelta<Index>;
     using Compare = TCmpT;
     using Iterator = SlotIterator<ArraySortView>;
 
@@ -237,7 +237,7 @@ class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
      */
     struct SlotState {
         std::vector<Index> rank;
-        SlotDiff<Index> pending;
+        IndexDiff<Index> pending;
         Index pendingSlotCount = 0;
         std::vector<Index> stale; // positions with stale pointers
         std::vector<Index> to;    // the reorder permutation
@@ -252,10 +252,11 @@ class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
 
     // Slot path: the spans for the per-index steps, the swaps, and the words
     // for the neighbour check and for folding deferred deltas
-    static constexpr SlotInterest::Mask sourceInterests =
-        SlotInterest::CREATED | SlotInterest::DELETED | SlotInterest::REPLACED |
-        SlotInterest::MODIFIED | SlotInterest::SWAPPED | SlotInterest::WORDS |
-        SlotInterest::TOUCHED_WORDS;
+    static constexpr IndexInterest::Mask sourceInterests =
+        IndexInterest::CREATED | IndexInterest::DELETED |
+        IndexInterest::REPLACED | IndexInterest::MODIFIED |
+        IndexInterest::SWAPPED | IndexInterest::WORDS |
+        IndexInterest::TOUCHED_WORDS;
 
     /**
      * Entries in sorted order, compared through their pointers
@@ -557,7 +558,7 @@ class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
         for (std::size_t q = std::max(p, newCount); q < size; ++q)
             pair(q - p);
 
-        // SlotDiff moves the earlier records along with their items: an
+        // IndexDiff moves the earlier records along with their items: an
         // erase lands on a new entry's position (a create there makes it
         // replaced) or past newCount
         permuteBySwaps(std::span<Index>(m_slot.to), static_cast<Index>(p),
@@ -604,7 +605,7 @@ class ArraySortView : public Broadcaster<SlotDelta<ViewIndex<TSourceT>>> {
     [[no_unique_address]] Compare m_cmp;
     std::vector<Entry> m_order; // per position
     BitVector m_taken;          // the first count() bits
-    SlotDiff<Index> m_diff;
+    IndexDiff<Index> m_diff;
     Index m_peakCount = 0; // the largest count since the last flush
     bool m_dirty = false;
     // Whether sync() ran since the last delta; a new view is about to be read

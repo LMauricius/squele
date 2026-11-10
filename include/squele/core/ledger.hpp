@@ -3,7 +3,7 @@
 #define H_INCLUDED_SQUELE_CORE_LEDGER
 
 #include "squele/core/concepts.hpp"
-#include "squele/core/from.hpp"
+#include "squele/queries/from.hpp"
 
 #include <concepts>
 #include <memory>

@@ -8,4 +8,4 @@ Names say what a thing is and what it is used for, and follow one scheme everywh
 - **The `Slot` prefix** marks everything built around sparse, reusable indices.
 - Free functions are verbs: `pull(view)`, `combineHash(seed, h)`.
 - Member types that concepts require drop the `T` suffix (`Query`, `View`, `Delta`, `Item`, `Index`); other aliases of template parameters keep it (`TIndexT` becomes `IndexT`).
-- **Prefer member types over rebuilt template-ids**: write `typename Source::Delta`, not `SlotDelta<typename Source::Index>`, so a type is spelled once, where it is defined.
+- **Prefer member types over rebuilt template-ids**: write `typename Source::Delta`, not `IndexDelta<typename Source::Index>`, so a type is spelled once, where it is defined.

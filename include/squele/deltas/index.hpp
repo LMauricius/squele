@@ -1,8 +1,8 @@
 #pragma once
-#ifndef H_INCLUDED_SQUELE_DELTAS_SLOT
-#define H_INCLUDED_SQUELE_DELTAS_SLOT
+#ifndef H_INCLUDED_SQUELE_DELTAS_INDEX
+#define H_INCLUDED_SQUELE_DELTAS_INDEX
 
-#include "squele/bits/slotBits.hpp"
+#include "squele/bits/indexBits.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -16,11 +16,11 @@
 namespace squele {
 
 /**
- * The net change of one slot since the last flush. `nothing` (e.g. create then
- * erase) differs from `untouched`: the slot was recorded, but its changes
+ * The net change at one index since the last flush. `nothing` (e.g. create then
+ * erase) differs from `untouched`: the index was recorded, but its changes
  * cancel out.
  */
-enum class SlotChange : std::uint8_t {
+enum class IndexChange : std::uint8_t {
     untouched = 0,
     nothing,
     created,
@@ -30,22 +30,23 @@ enum class SlotChange : std::uint8_t {
 };
 
 /**
- * The changes of 64 consecutive slots (one `BitWord` each) as four bit planes:
+ * The changes of 64 consecutive indices (one `BitWord` each) as four bit
+ * planes:
  * - `touched`: recorded since the last flush;
  * - `existed`: held an item at the last flush;
  * - `exists`: holds an item now;
  * - `same`: holds the item it held at the last flush (changed in place only).
  *
  * Only touched bits are meaningful, and `same` is a subset of
- * `existed & exists`, so every `SlotChange` is a mask expression and a whole
+ * `existed & exists`, so every `IndexChange` is a mask expression and a whole
  * word is recorded with a few bit operations. The recording operations
  * compose like changes do: a create after a delete gives a replace, a delete
  * after a create gives nothing.
- * @note Recording an impossible sequence (a create on a slot that holds an
+ * @note Recording an impossible sequence (a create on an index that holds an
  * item, an erase or modify on one that does not) is UB; touched bits are
  * asserted, untouched ones cannot be checked.
  */
-struct SlotWordChange {
+struct IndexWordChange {
     BitWord touched = 0;
     BitWord existed = 0;
     BitWord exists = 0;
@@ -60,19 +61,19 @@ struct SlotWordChange {
     /**
      * @returns the change of bit `b`
      */
-    SlotChange kind(std::size_t b) const {
+    IndexChange kind(std::size_t b) const {
         const BitWord m = BitWord{1} << b;
         if (!(touched & m))
-            return SlotChange::untouched;
+            return IndexChange::untouched;
         if (same & m)
-            return SlotChange::modified;
+            return IndexChange::modified;
         if (existed & m)
-            return exists & m ? SlotChange::replaced : SlotChange::deleted;
-        return exists & m ? SlotChange::created : SlotChange::nothing;
+            return exists & m ? IndexChange::replaced : IndexChange::deleted;
+        return exists & m ? IndexChange::created : IndexChange::nothing;
     }
 
     /**
-     * Records that the free slots `m` became taken
+     * Records that the free indices `m` became taken
      */
     void create(BitWord m) {
         assert(!(touched & exists & m));
@@ -82,38 +83,38 @@ struct SlotWordChange {
     }
 
     /**
-     * Records that the taken slots `m` became free
+     * Records that the taken indices `m` became free
      */
     void erase(BitWord m) {
         assert(!(touched & ~exists & m));
-        existed |= m & ~touched; // newly touched slots held their item
+        existed |= m & ~touched; // newly touched indices held their item
         exists &= ~m;
         same &= ~m;
         touched |= m;
     }
 
     /**
-     * Records that the items of the taken slots `m` changed in place
+     * Records that the items of the taken indices `m` changed in place
      */
     void modify(BitWord m) {
         assert(!(touched & ~exists & m));
         const BitWord fresh = m & ~touched;
         existed |= fresh;
         exists |= fresh;
-        same |= fresh; // touched slots keep their kind
+        same |= fresh; // touched indices keep their kind
         touched |= m;
     }
 
     /**
      * Appends the changes `later` (recorded after these, starting from the
      * state these end in): the result is the net change of both.
-     * A slot touched only by `later` takes its change; one touched by both
+     * An index touched only by `later` takes its change; one touched by both
      * keeps its `existed` from these, takes `exists` from `later`, and is
      * still the same item only if both kept it.
-     * @warning `later` must start where these end: a slot touched by both
+     * @warning `later` must start where these end: an index touched by both
      * existed in `later` exactly when it exists here (asserted).
      */
-    void fold(const SlotWordChange &later) {
+    void fold(const IndexWordChange &later) {
         const BitWord t = later.touched;
         assert(!((later.existed ^ exists) & touched & t));
         existed |= later.existed & ~touched;
@@ -124,7 +125,7 @@ struct SlotWordChange {
 };
 
 /**
- * Flags naming the members of `SlotDelta` a listener reads, one bit per
+ * Flags naming the members of `IndexDelta` a listener reads, one bit per
  * member. A listener adds them to its source (`addInterests`), and the source
  * fills only the members someone asked for; the rest stay empty.
  * `count`, `slotCount`, `touchedCount` and `relocated` are always
@@ -134,7 +135,7 @@ struct SlotWordChange {
  * adds it instead of the four span flags, so a source with only such listeners
  * never builds spans for bulk changes.
  */
-namespace SlotInterest {
+namespace IndexInterest {
 using Mask = std::uint8_t;
 inline constexpr Mask CREATED = 1 << 0;
 inline constexpr Mask DELETED = 1 << 1;
@@ -145,31 +146,31 @@ inline constexpr Mask WORDS = 1 << 5;
 inline constexpr Mask TOUCHED_WORDS = 1 << 6;
 inline constexpr Mask SPARSE_SPANS = 1 << 7;
 inline constexpr Mask ALL = 0xFF;
-} // namespace SlotInterest
+} // namespace IndexInterest
 
 /**
- * Changes of a slot-based view since its last flush.
+ * Changes of an index-based view since its last flush.
  * A delta is temporary: its spans view storage owned by the flushing view, so
  * it is valid only during the listener call.
  * The changes come in two forms; a listener reads the cheaper one for its work:
  * - index spans (`created`, ...), for per-index work on a few changes;
  * - word blocks (`words`, `touchedWords`), for word-level work such as
- *   updating per-slot flags 64 at a time.
+ *   updating per-index flags 64 at a time.
  * Both forms describe the changes after the `swapped` ones: a listener first
  * applies the swaps, in order, to its state at the last flush.
  * An item keeps its address unless it is created, replaced or swapped, or
  * `relocated` is set; a modified item keeps it too.
  * @note Every index appears in at most one span. Spans are *unordered*; a
  * consumer that needs index order walks the touched words instead.
- * @note A member is filled only while some listener has its `SlotInterest`
+ * @note A member is filled only while some listener has its `IndexInterest`
  * flag added; otherwise it is empty.
  */
-template <std::integral TIndexT> struct SlotDelta {
+template <std::integral TIndexT> struct IndexDelta {
     using IndexT = TIndexT;
-    using Interests = SlotInterest::Mask;
+    using Interests = IndexInterest::Mask;
 
     /**
-     * Two indices whose items (or free slots) traded places; either may be
+     * Two indices whose items (or free indices) traded places; either may be
      * free. An item keeps its value, but not its address
      */
     struct Swap {
@@ -241,11 +242,11 @@ template <std::integral TIndexT> struct SlotDelta {
     std::span<const Swap> swapped;
 
     /**
-     * The changes per 64 slots, indexed by word (`index / bitWordBits`).
+     * The changes per 64 indices, indexed by word (`index / bitWordBits`).
      * Meaningful only at the `touchedWords` entries; it may be shorter than
      * `slotCount` needs.
      */
-    std::span<const SlotWordChange> words;
+    std::span<const IndexWordChange> words;
 
     /**
      * Indices of the `words` with at least one touched bit; unordered, each
@@ -257,17 +258,17 @@ template <std::integral TIndexT> struct SlotDelta {
 };
 
 /**
- * Self-sufficient accumulator of slot changes between flushes.
+ * Self-sufficient accumulator of index changes between flushes.
  * Coalesces repeated changes to the same index in O(1) and produces a
- * `SlotDelta` in O(w), for w touched words. Changes are recorded per index or
- * per word (a mask of 64 slots at once).
+ * `IndexDelta` in O(w), for w touched words. Changes are recorded per index or
+ * per word (a mask of 64 indices at once).
  * @note Recording an impossible sequence for one index (e.g. a create after a
- * create) is UB; it is asserted where it can be (see `SlotWordChange`).
+ * create) is UB; it is asserted where it can be (see `IndexWordChange`).
  */
-template <std::integral TIndexT> class SlotDiff {
+template <std::integral TIndexT> class IndexDiff {
   public:
     using IndexT = TIndexT;
-    using DeltaT = SlotDelta<IndexT>;
+    using DeltaT = IndexDelta<IndexT>;
 
     /**
      * Records that the free index `i` became taken
@@ -285,7 +286,7 @@ template <std::integral TIndexT> class SlotDiff {
     void modify(IndexT i) { modifyWord(word(i), bit(i)); }
 
     /**
-     * Records that the items (or free slots) at the distinct indices `a` and
+     * Records that the items (or free indices) at the distinct indices `a` and
      * `b` traded places: the changes recorded for each follow its item, and
      * `{a, b}` is appended to the swaps
      * @note Strong exception guarantee.
@@ -312,7 +313,7 @@ template <std::integral TIndexT> class SlotDiff {
 
     /**
      * Records that every item may have moved to a new address (see
-     * `SlotDelta::relocated`)
+     * `IndexDelta::relocated`)
      */
     void relocate() noexcept { m_relocated = true; }
 
@@ -339,7 +340,7 @@ template <std::integral TIndexT> class SlotDiff {
             swapBits(s.a, s.b);
         for (IndexT w : d.touchedWords) {
             const auto at = static_cast<std::size_t>(w);
-            const SlotWordChange &later = d.words[at];
+            const IndexWordChange &later = d.words[at];
             touch(at, later.touched).fold(later);
         }
         m_relocated |= d.relocated;
@@ -350,8 +351,8 @@ template <std::integral TIndexT> class SlotDiff {
      * are filled, the rest are empty
      * @note The returned spans are valid until this diff changes
      */
-    DeltaT delta(IndexT count, IndexT slotCount, SlotInterest::Mask wanted) {
-        namespace SI = SlotInterest;
+    DeltaT delta(IndexT count, IndexT slotCount, IndexInterest::Mask wanted) {
+        namespace SI = IndexInterest;
         // The word members view the diff's own state, so they cost nothing
         DeltaT d{};
         d.count = count;
@@ -400,7 +401,7 @@ template <std::integral TIndexT> class SlotDiff {
         // Upward spans come out ascending, downward ones descending
         for (IndexT w : m_touchedWords) {
             const auto at = static_cast<std::size_t>(w);
-            const SlotWordChange &c = m_words[at];
+            const IndexWordChange &c = m_words[at];
             // Emptied by swaps: the lone-change path below needs a set bit
             if (!c.touched)
                 continue;
@@ -542,14 +543,14 @@ template <std::integral TIndexT> class SlotDiff {
      * @warning Needs `reserve()` to cover both words (not checked).
      */
     void swapBits(IndexT a, IndexT b) noexcept {
-        SlotWordChange &ca = m_words[word(a)], &cb = m_words[word(b)];
+        IndexWordChange &ca = m_words[word(a)], &cb = m_words[word(b)];
         const auto sa = static_cast<std::size_t>(a) % bitWordBits;
         const auto sb = static_cast<std::size_t>(b) % bitWordBits;
         // XOR swap of one bit per plane; ca and cb may be the same block, so
         // the difference is read before either write
-        for (BitWord SlotWordChange::*p :
-             {&SlotWordChange::touched, &SlotWordChange::existed,
-              &SlotWordChange::exists, &SlotWordChange::same}) {
+        for (BitWord IndexWordChange::*p :
+             {&IndexWordChange::touched, &IndexWordChange::existed,
+              &IndexWordChange::exists, &IndexWordChange::same}) {
             const BitWord x = ((ca.*p >> sa) ^ (cb.*p >> sb)) & 1;
             ca.*p ^= x << sa;
             cb.*p ^= x << sb;
@@ -563,15 +564,15 @@ template <std::integral TIndexT> class SlotDiff {
     }
 
     /**
-     * Prepares word `w` for recording the slots `m`: runs every allocating
+     * Prepares word `w` for recording the indices `m`: runs every allocating
      * step first (strong exception guarantee), then counts the newly touched
-     * slots.
+     * indices.
      * @returns the word's block, for the caller to record into
      */
-    SlotWordChange &touch(std::size_t w, BitWord m) {
+    IndexWordChange &touch(std::size_t w, BitWord m) {
         if (w >= m_words.size())
             reserve(w + 1);
-        SlotWordChange &c = m_words[w];
+        IndexWordChange &c = m_words[w];
         // Only an untouched word can be unlisted (or emptied by swaps)
         if (!c.touched && m)
             list(w);
@@ -584,9 +585,10 @@ template <std::integral TIndexT> class SlotDiff {
         return c;
     }
 
-    // One block per 64 slots, grown on demand; only touched blocks are
+    // One block per 64 indices, grown on demand; only touched blocks are
     // non-zero. Aligned so a block never splits a cache line
-    std::vector<SlotWordChange, AlignedAllocator<SlotWordChange, bitWordAlign>>
+    std::vector<IndexWordChange,
+                AlignedAllocator<IndexWordChange, bitWordAlign>>
         m_words;
     // Indices of the touched m_words; each appears once, which m_listed
     // (one bit per block, kept only while there are swaps) keeps true after
@@ -605,4 +607,4 @@ template <std::integral TIndexT> class SlotDiff {
 
 } // namespace squele
 
-#endif // H_INCLUDED_SQUELE_DELTAS_SLOT
+#endif // H_INCLUDED_SQUELE_DELTAS_INDEX

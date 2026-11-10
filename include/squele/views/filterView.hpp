@@ -2,13 +2,13 @@
 #ifndef H_INCLUDED_SQUELE_VIEWS_FILTERVIEW
 #define H_INCLUDED_SQUELE_VIEWS_FILTERVIEW
 
+#include "squele/bits/indexBits.hpp"
 #include "squele/bits/pull.hpp"
-#include "squele/bits/slotBits.hpp"
 #include "squele/bits/slotIterator.hpp"
 #include "squele/components/broadcaster.hpp"
 #include "squele/core/concepts.hpp"
 #include "squele/core/ledger.hpp"
-#include "squele/deltas/slot.hpp"
+#include "squele/deltas/index.hpp"
 #include "squele/queries/filter.hpp"
 
 #include <algorithm>
@@ -206,7 +206,7 @@ class FilterView : public Broadcaster<typename TSourceT::Delta> {
         for (Index w : d.touchedWords) {
             const auto at = static_cast<std::size_t>(w);
             const std::size_t base = at * bitWordBits;
-            const SlotWordChange &c = d.words[at];
+            const IndexWordChange &c = d.words[at];
             const BitWord t = c.touched;
             const BitWord old = pass[at];
 
@@ -235,8 +235,8 @@ class FilterView : public Broadcaster<typename TSourceT::Delta> {
     // deltas only), the word blocks by the word path. Fixed, since `m_pass`
     // needs every change whatever this view's listeners want
     static constexpr typename Delta::Interests sourceInterests =
-        SlotInterest::SPARSE_SPANS | SlotInterest::WORDS |
-        SlotInterest::TOUCHED_WORDS | SlotInterest::SWAPPED;
+        IndexInterest::SPARSE_SPANS | IndexInterest::WORDS |
+        IndexInterest::TOUCHED_WORDS | IndexInterest::SWAPPED;
 
     bool check(Index i) const { return m_pred((*m_source)[i]); }
 
@@ -310,7 +310,7 @@ class FilterView : public Broadcaster<typename TSourceT::Delta> {
      * bit (passing before and after) is replaced where the source replaced
      * it, else modified.
      */
-    void recordWord(std::size_t at, const SlotWordChange &c, BitWord old,
+    void recordWord(std::size_t at, const IndexWordChange &c, BitWord old,
                     BitWord next) {
         const BitWord kept = old & next & c.touched;
         const BitWord keptReplaced = kept & ~c.same;
@@ -327,10 +327,10 @@ class FilterView : public Broadcaster<typename TSourceT::Delta> {
     [[no_unique_address]] typename Query::Predicate m_pred;
     BitVector m_pass; // per source index: taken and passed
     Index m_count = 0;
-    SlotDiff<Index> m_diff;
+    IndexDiff<Index> m_diff;
     // Source changes not applied yet, and the source's slot count at the
     // last of them
-    SlotDiff<Index> m_pending;
+    IndexDiff<Index> m_pending;
     Index m_pendingSlotCount = 0;
     bool m_dirty = false;
     // Whether sync() ran since the last delta; a new view is about to be read
