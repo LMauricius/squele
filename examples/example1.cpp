@@ -21,7 +21,7 @@ using Indices = std::vector<Index>;
 
 static_assert(Original<Store> && SlotViewable<Store>);
 static_assert(Queryable<Filter<From<Store>>>);
-static_assert(std::same_as<Filter<From<Store>>::View, SlotFilterView<Store>>);
+static_assert(std::same_as<Filter<From<Store>>::View, FilterView<Store>>);
 static_assert(std::forward_iterator<Store::Iterator>);
 
 /**
@@ -85,8 +85,8 @@ int main() {
     Recorder rec;
     evens->addListener(&rec);
     // A listener asks for the delta members it reads; the rest stay empty
-    constexpr auto recorded = SlotInterest::CREATED | SlotInterest::DELETED |
-                              SlotInterest::REPLACED | SlotInterest::MODIFIED;
+    constexpr auto recorded = IndexInterest::CREATED | IndexInterest::DELETED |
+                              IndexInterest::REPLACED | IndexInterest::MODIFIED;
     evens->addInterests(recorded);
 
     // Brings the filter up to date (pulling the store) and flushes it

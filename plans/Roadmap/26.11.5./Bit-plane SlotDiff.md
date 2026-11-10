@@ -25,7 +25,7 @@ Effects:
 
 Decisions:
 - Interleaved blocks (one cache line per record) over separate planes (a contiguous `touched` that `BitSpan` could view). The consumers that read `touched` all walk `touchedWords`, so a strided block costs them nothing.
-- The block type lives in `deltas/slot.hpp` next to `SlotDelta`, since it is part of the delta's contract.
+- The block type lives in `deltas/index.hpp` next to `SlotDelta`, since it is part of the delta's contract.
 - `SlotChange` stays as the per-slot answer of `block.kind(bit)` for consumers that want a switch; the fuzz test keeps checking it.
 
 Addresses:
@@ -40,7 +40,7 @@ Useful:
 ---
 done: true
 ---
-`struct SlotWordChange { BitWord touched, existed, exists, same; }` in `deltas/slot.hpp`, with the derived masks (`created()`, `deleted()`, `replaced()`, `modified()`, `nothing()`), `kind(bit)` returning `SlotChange`, and the three recording operations taking a mask (`create(m)`, `erase(m)`, `modify(m)`), each asserting the impossible sequences (a create on an existing slot, an erase or modify on a free one). The fuzz test checks every two-step sequence against the current `coalesce` table before anything else changes.
+`struct SlotWordChange { BitWord touched, existed, exists, same; }` in `deltas/index.hpp`, with the derived masks (`created()`, `deleted()`, `replaced()`, `modified()`, `nothing()`), `kind(bit)` returning `SlotChange`, and the three recording operations taking a mask (`create(m)`, `erase(m)`, `modify(m)`), each asserting the impossible sequences (a create on an existing slot, an erase or modify on a free one). The fuzz test checks every two-step sequence against the current `coalesce` table before anything else changes.
 
 Blocks:
 - [Task] SlotDiff on bit planes
@@ -65,7 +65,7 @@ Useful:
 ---
 done: true
 ---
-`SlotDelta::words` (`std::span<const SlotWordChange>`, indexed by word) replaces `touched` and `changes`; `touchedWords` stays. `SlotInterest::TOUCHED` and `CHANGES` merge into one flag `WORDS`. The fuzz `Mirror` checks `words` against the spans the way it checks the bit members now (every touched bit has a kind, every span index is touched, padding and untouched blocks are zero).
+`SlotDelta::words` (`std::span<const SlotWordChange>`, indexed by word) replaces `touched` and `changes`; `touchedWords` stays. `IndexInterest::TOUCHED` and `CHANGES` merge into one flag `WORDS`. The fuzz `Mirror` checks `words` against the spans the way it checks the bit members now (every touched bit has a kind, every span index is touched, padding and untouched blocks are zero).
 
 Blocks:
 - [Task] Word-level recording in SlotFilterView

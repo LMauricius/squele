@@ -35,18 +35,16 @@ using PredicatePtr = bool (*)(const typename TSourceQ::View::Item &);
 } // namespace detail
 
 // Views take their source view, not its query, so their names stay short
-// (`SlotFilterView<Store>`); the query is recovered from the source's query
+// (`FilterView<Store>`); the query is recovered from the source's query
 // and the predicate type
 template <Viewable TSourceT,
           class TPredT = detail::PredicatePtr<typename TSourceT::Query>>
+    requires SlotViewable<TSourceT>
 class FilterView;
-template <Viewable TSourceT,
-          class TPredT = detail::PredicatePtr<typename TSourceT::Query>>
-class SlotFilterView;
 
 /**
  * A query for the items of a source that pass a predicate.
- * Its view is `SlotFilterView` for a `SlotViewable` source, else `FilterView`.
+ * Its view is `FilterView`, which supports only `SlotViewable` sources yet.
  * @note The predicate is a `FilterPredicate`, so the query is comparable and
  * hashable. A function pointer is called indirectly; an empty functor or a
  * captureless lambda (`Filter{q, [](const T &x) { ... }}`) is inlined into
@@ -62,9 +60,7 @@ class Filter {
     using Source = typename SourceQ::View;
     using Item = typename Source::Item;
     using Predicate = TPredT;
-    using View = std::conditional_t<SlotViewable<Source>,
-                                    SlotFilterView<Source, Predicate>,
-                                    FilterView<Source, Predicate>>;
+    using View = FilterView<Source, Predicate>;
 
     /**
      * @param source the source's query (`From{p_view}` for an original)
@@ -105,6 +101,6 @@ struct std::hash<squele::Filter<TSourceQ, TPredT>> {
 
 // The views last: they include this header, and `result()` needs them
 // complete, so including the query alone is enough to use it
-#include "squele/views/slotFilterView.hpp"
+#include "squele/views/filterView.hpp"
 
 #endif // H_INCLUDED_SQUELE_QUERIES_FILTER

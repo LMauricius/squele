@@ -6,7 +6,7 @@ Useful:
 
 ## Severity
 
-- A call of about 15 instructions per use instead of one. Today popcount runs twice per touched word in `SlotFilterView::onDelta`, so bulk deltas pay roughly 2 x 16K calls per 1M slots: small next to the predicate calls, but a tight word loop (a future set view, or counting pass bits) would be dominated by it.
+- A call of about 15 instructions per use instead of one. Today popcount runs twice per touched word in `FilterView::onDelta`, so bulk deltas pay roughly 2 x 16K calls per 1M slots: small next to the predicate calls, but a tight word loop (a future set view, or counting pass bits) would be dominated by it.
 - Header-only, so the user's build flags decide; the library cannot fix it alone.
 
 ## Possible efforts

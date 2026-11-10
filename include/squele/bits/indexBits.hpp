@@ -1,6 +1,6 @@
 #pragma once
-#ifndef H_INCLUDED_SQUELE_BITS_SLOTBITS
-#define H_INCLUDED_SQUELE_BITS_SLOTBITS
+#ifndef H_INCLUDED_SQUELE_BITS_INDEXBITS
+#define H_INCLUDED_SQUELE_BITS_INDEXBITS
 
 #include <algorithm>
 #include <bit>
@@ -195,4 +195,4 @@ class BitVector {
 
 } // namespace squele
 
-#endif // H_INCLUDED_SQUELE_BITS_SLOTBITS
+#endif // H_INCLUDED_SQUELE_BITS_INDEXBITS

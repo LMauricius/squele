@@ -3,9 +3,9 @@ Names say what a thing is and what it is used for, and follow one scheme everywh
 
 - **Concepts are adjectives** describing what a type is or can do: `Flushable`, `Syncable`, `Viewable`, `Queryable`, `Listenable` (accepts listeners), `SlotViewable`, `Original` (has no sources and is modified by hand), `Dependent<V, S>` (derived from source `S`), `Listening<L, S>` (receives `S`'s deltas).
 - **Classes are nouns** naming their role: `Ledger` (keeps views per query), `Broadcaster` (sends deltas to listeners), `SlotIndexPool` (hands out and reclaims slot indices), `SlotCell` (raw storage for one item), `SlotStore` (an original holding items in slots).
-- **Queries and their views pair up**: the query `X` creates `XView`; when the source is slot-based, it creates `SlotXView` instead (`Filter`, `FilterView`, `SlotFilterView`). A query that wraps an existing view reads as a preposition: `From{p_view}`. A view template takes its source view, not the source query (`SlotFilterView<Store>`), and recovers the query as `Source::Query`.
+- **Queries and their views pair up**: the query `X` creates `XView`, one class for every source kind (see the Note on concepts over virtual bases). A prefix names how the view stores its items, not which source it is optimized for (`ArraySortView`). A query that wraps an existing view reads as a preposition: `From{p_view}`. A view template takes its source view, not the source query (`FilterView<Store>`), and recovers the query as `Source::Query`.
 - **Change types**: a `*Delta` is a temporary description of changes, a `*Diff` owns accumulated changes (see the Deltas and Diffs Note).
 - **The `Slot` prefix** marks everything built around sparse, reusable indices.
 - Free functions are verbs: `pull(view)`, `combineHash(seed, h)`.
 - Member types that concepts require drop the `T` suffix (`Query`, `View`, `Delta`, `Item`, `Index`); other aliases of template parameters keep it (`TIndexT` becomes `IndexT`).
-- **Prefer member types over rebuilt template-ids**: write `typename Source::Delta`, not `SlotDelta<typename Source::Index>`, so a type is spelled once, where it is defined.
+- **Prefer member types over rebuilt template-ids**: write `typename Source::Delta`, not `IndexDelta<typename Source::Index>`, so a type is spelled once, where it is defined.
